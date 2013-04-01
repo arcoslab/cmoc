@@ -9,6 +9,7 @@ setup(name='cmoc',
       author='Federico Ruiz Ugalde',
       author_email='memeruiz@gmail.com',
       url='http://www.arcoslab.org/',
-      packages=['robot']
+      package_dir={'cmoc': ''},
+      packages=['cmoc', 'cmoc.robot'],
       scripts=['robot/joint_sim']
      )

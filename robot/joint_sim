@@ -18,7 +18,7 @@
 
 from numpy import array, amin, amax
 
-from joint_controller import Controller_mass_sim, Controller_type
+from cmoc.robot.joint_controller import Controller_mass_sim, Controller_type
 
 def main():
     import yarp

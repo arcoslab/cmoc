@@ -1,6 +1,6 @@
-NAME=arcospyu
+NAME=cmoc
 PREFIX ?= ${HOME}/local/DIR/${NAME}
-DEB_TARGET=python-arcospyu_1.0-1_all.deb
+DEB_TARGET=python-cmoc_1.0-1_all.deb
 
 install:
 	python setup.py install --prefix=${PREFIX}
