@@ -11,5 +11,5 @@ setup(name='cmoc',
       url='http://www.arcoslab.org/',
       package_dir={'cmoc': ''},
       packages=['cmoc', 'cmoc.robot'],
-      scripts=['robot/joint_sim']
+      scripts=['robot/joint_sim', 'robot/torque_sim', 'robot/sahand_yarp_sim']
      )

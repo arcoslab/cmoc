@@ -18,31 +18,30 @@
 #This module connects to the arm joint ports and to the hand to calculate its jacobians to calculate expected torques in the torque sensors given external forces in each finger tip.
 
 import sys, os
-sys.path.append("../yarp_tools")
-from yarp_tools import yarp_connect_blocking
+from arcospyu.yarp_tools.yarp_comm_helpers import yarp_connect_blocking
 import yarp
 import time
-sys.path.append("../hand_cart/")
-sys.path.append("../robot")
-sys.path.append("../misc")
-sys.path.append("../python/numeric/")
-sys.path.append("../calibration_data")
+sys.path.append("../../temp/hand_cart/")
+sys.path.append("../../temp/calibration_data")
 from hand import Hand
-from robot import Robot
-from helpers import Roboviewer_objects, Joint_sim, Finger_sim, Hand_sim
+from arcospyu.lafik.lafik import Lafik
+from sim_handlers import Joint_sim, Finger_sim, Hand_sim
+sys.path.append("../../temp/pyrovito/")
+from pyrovito_utils import Roboviewer_objects
 from time import sleep
 from numpy import dot, array, concatenate
 from PyKDL import Wrench, Vector
 import numpy
 import optparse
-import quat
+from arcospyu.numeric import quat
 from finger_calibration_data import *
+from arcospyu.config_parser.config_parser import import_config
 
 class Handle_arm_joints():
-    def __init__(self, arm_portbasename, handlername="handle_arm_joints"):
+    def __init__(self, arm_portbasename, handlername="/handle_arm_joints"):
         import imp
         prename=arm_portbasename
-        full_name=prename+ "/" + handlername
+        full_name=prename+handlername
 
         self.q_in_port=yarp.BufferedPortBottle()
         self.q_in_port.open(full_name+"/qin")
@@ -60,13 +59,13 @@ class Handle_arm_joints():
 
 class Sim_torques():
     '''class that connects to arms and hands and calculates torques given a force'''
-    def __init__(self, baseportname="/torque_sim"):
+    def __init__(self, config_lwr_right, config_lwr_left, baseportname="/torque_sim"):
         self.rarmj_handle=Handle_arm_joints("/lwr/right",handlername=baseportname+"/arm_joints")
         self.larmj_handle=Handle_arm_joints("/lwr/left",handlername=baseportname+"/arm_joints")
         self.rhand=Hand(handedness="right",sahand_number=0, portprefix=baseportname+"/hand_handler")
         self.lhand=Hand(handedness="left",sahand_number=1, portprefix=baseportname+"/hand_handler")
-        self.rarm_robot=Robot(__import__("config-lwr-right"))
-        self.larm_robot=Robot(__import__("config-lwr-left"))
+        self.rarm_robot=Lafik(import_config(config_lwr_right))
+        self.larm_robot=Lafik(import_config(config_lwr_left))
         self.sim_forces_right=[array([0.]*3)]*4
         self.sim_forces_left=[array([0.]*3)]*4
         self.est_forces_right=[array([0.]*3)]*4
@@ -83,7 +82,8 @@ class Sim_torques():
         self.rhand_torques=array([[0.]*3]*4)
         self.lhand_torques=array([[0.]*3]*4)
         arm_joint_num=7
-        self.arm_torques=array([0.]*arm_joint_num)
+        self.arm_torques_right=array([0.]*arm_joint_num)
+        self.arm_torques_left=array([0.]*arm_joint_num)
 
     def update_data(self):
         self.rarm_robot.jntsList=self.rarmj_handle.get_angles(False)
@@ -101,9 +101,9 @@ class Sim_torques():
 
     def get_torques_all(self,arm=0):
         #arm_joint_num=7
-        self.arm_torques*=0
         #hand_torques=[]
         if arm==0: #right
+                self.arm_torques_right*=0
                 for finger,force in enumerate(self.sim_forces_right):
                     #referencing fingertip force to arm end effector force
                     self.finger_tip_right[finger]=self.get_cart_pos(arm,finger)
@@ -111,19 +111,22 @@ class Sim_torques():
                     #self.wrench=Wrench()
                     self.wrench.force=Vector(force[0],force[1],force[2])
                     arm_wrench=self.wrench.RefPoint(Vector(finger_tip_to_hand[0],finger_tip_to_hand[1],finger_tip_to_hand[2]))
-                    #print "Arm_wrench", arm_wrench
+                    print "Arm_wrench", arm_wrench
 
                     #calculating arm torques
                     self.rarm_robot.update_jac()
-                    self.arm_torques+=self.rarm_robot.calc_torques(array([arm_wrench[i] for i in xrange(6)]))
+                    self.arm_torques_right+=self.rarm_robot.calc_torques(array([arm_wrench[i] for i in xrange(6)]))
+                    print "Arm torques", self.arm_torques_right
                     #calculating hand torques
                     hand_force=dot(self.rarm_frame[:3,:3].T,array(force)) #with respect to hand base
                     #hand_torques=self.rhand.fingers[finger].kinematics.calc_torques(hand_force.reshape((6,1)).T)
                     #hand_torques.append(self.rhand.fingers[finger].kinematics.calc_torques(concatenate((hand_force,array([0.]*3)))))
                     self.rhand_torques[finger,:]=(self.rhand.fingers[finger].kinematics.calc_torques(concatenate((hand_force,array([0.]*3)))))
                 #print "Hand torques", self.rhand_torques
-                return(self.arm_torques,self.rhand_torques)
+                print "Arm_torques final:", self.arm_torques_right
+                return(self.arm_torques_right,self.rhand_torques)
         if arm==1:
+                self.arm_torques_left*=0
                 for finger,force in enumerate(self.sim_forces_left):
                     #referencing fingertip force to arm end effector force
                     self.finger_tip_left[finger]=self.get_cart_pos(arm,finger)
@@ -135,14 +138,14 @@ class Sim_torques():
 
                     #calculating arm torques
                     self.larm_robot.update_jac()
-                    self.arm_torques+=self.larm_robot.calc_torques(array([arm_wrench[i] for i in xrange(6)]))
+                    self.arm_torques_left+=self.larm_robot.calc_torques(array([arm_wrench[i] for i in xrange(6)]))
                     #calculating hand torques
                     hand_force=dot(self.larm_frame[:3,:3].T,array(force)) #with respect to hand base
                     #hand_torques=self.rhand.fingers[finger].kinematics.calc_torques(hand_force.reshape((6,1)).T)
                     #hand_torques.append(self.lhand.fingers[finger].kinematics.calc_torques(concatenate((hand_force,array([0.]*3)))))
                     self.lhand_torques[finger,:]=(self.lhand.fingers[finger].kinematics.calc_torques(concatenate((hand_force,array([0.]*3)))))
                 #print "Hand torques", self.lhand_torques
-                return(self.arm_torques,self.lhand_torques)
+                return(self.arm_torques_left,self.lhand_torques)
 
     def get_torques(self,arm,finger,force):
         if arm=="right":
@@ -253,11 +256,14 @@ def main():
     simulation_on=False
     parser=optparse.OptionParser("usage: %prog [options]")
     parser.add_option("-s", "--simulation", action="store_true", dest="sim", default=False,help="Simulation")
+    parser.add_option("-d", "--config_dir", dest="config_dir", default="../config_data/lwr/", type="string", help="config data directory")
     (options, args)= parser.parse_args(sys.argv[1:])
     simulation_on=options.sim
+    config_lwr_right=options.config_dir+"/config-lwr-right.py"
+    config_lwr_left=options.config_dir+"/config-lwr-left.py"
     raw_input("This program is going to move the thumb angle, be sure the hand is away of things, press enter to continue")
 
-    sim_torques=Sim_torques()
+    sim_torques=Sim_torques(config_lwr_right, config_lwr_left)
 
     if simulation_on:
         joint_sim_client_right=Joint_sim("/torque_sim/right","/lwr/right/joint_sim")
@@ -314,9 +320,11 @@ def main():
             sim_torques.sim_forces_right=forces[:4]
             sim_torques.sim_forces_left=forces[4:]
 
+        print "TEST"
         rarm_torques,rhand_torques=sim_torques.get_torques_all(arm=0)
+        print "right torques", rarm_torques, rhand_torques
         larm_torques,lhand_torques=sim_torques.get_torques_all(arm=1)
-        #print "right torques", rarm_torques, rhand_torques
+        print "right torques", rarm_torques, rhand_torques
         #print "left torques", larm_torques, lhand_torques
         if simulation_on:
             joint_sim_client_right.set_torques(0.1*rarm_torques)
