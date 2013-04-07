@@ -13,3 +13,4 @@ setup(name='cmoc',
       packages=['cmoc', 'cmoc.robot'],
       scripts=['robot/joint_sim', 'robot/torque_sim', 'robot/sahand_yarp_sim']
      )
+

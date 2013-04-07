@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import sahand
+import cmoc.robot.sahand as sahand
 from arcospyu.control.nanosleep import nanosleep
 from time import sleep
 from math import *
@@ -261,7 +261,7 @@ class ROSPublisher:
         self.pub_diag.publish(msg)
 
 class Finger_sim(object):
-    def __init__(self,port,basename,finger_num):
+    def __init__(self,port,basename,finger_num, hands_config):
         sys.path.append("../../temp/hand_cart")
         from cmoc.robot.joint_controller import Controller_mass_sim, Controller_type
         import time
@@ -272,7 +272,8 @@ class Finger_sim(object):
         self.ext_torques=array((0.,0.,0.))
         self.speed=array((0.,0.,0.))
         self._angles=array((0.,0.,0.))
-        from hands_kin import fingers_lim
+        #from hands_kin import fingers_lim
+        fingers_lim=hands_config.fingers_lim
         self.kp=0.8
         self.kvp=0.8
         self.inertia=0.1
@@ -366,8 +367,8 @@ class Finger_sim(object):
         self._angles=self.sim.get_q(time.time())[:3]*180.0/pi
 
 class Thumb_sim(Finger_sim):
-    def __init__(self,port,basename,finger):
-        Finger_sim.__init__(self,port,basename,finger)
+    def __init__(self,port,basename,finger, hands_config):
+        Finger_sim.__init__(self,port,basename,finger, hands_config)
         self.ref_angles=array((5.,5.,0.,0.))
         self.max_base_vel=100.
         self.ref_vels=array((20.,20.,20.,self.max_base_vel))
@@ -397,12 +398,12 @@ class Thumb_sim(Finger_sim):
         self._base_angle=self.sim.q[-1]*180.0/pi
 
 class Hand_sim(object):
-    def __init__(self,port,basename):
+    def __init__(self,port,basename, hands_config):
         self.port=port
-        self.thumb=Thumb_sim(self.port,basename,0)
-        self.first=Finger_sim(self.port,basename,1)
-        self.middle=Finger_sim(self.port,basename,2)
-        self.ring=Finger_sim(self.port,basename,3)
+        self.thumb=Thumb_sim(self.port,basename,0, hands_config)
+        self.first=Finger_sim(self.port,basename,1, hands_config)
+        self.middle=Finger_sim(self.port,basename,2, hands_config)
+        self.ring=Finger_sim(self.port,basename,3, hands_config)
         self.emergency_stop=False
 
     def __iter__(self):
@@ -426,11 +427,11 @@ class Hand_sim(object):
 import time
 
 class Sahboard_sim(object):
-    def __init__(self,basename,enabled_hands=[True,True]):
+    def __init__(self,basename, hands_config, enabled_hands=[True,True]):
         self.enabled_hands=enabled_hands
         self.hands=[]
-        self.hands.append(Hand_sim(sahand.PORT_1,basename))
-        self.hands.append(Hand_sim(sahand.PORT_2,basename))
+        self.hands.append(Hand_sim(sahand.PORT_1,basename, hands_config))
+        self.hands.append(Hand_sim(sahand.PORT_2,basename, hands_config))
         self.counter=0
         self.previous_time=time.time()
         self.cur_time=time.time()
@@ -483,12 +484,15 @@ def main():
                       help="Disable ros", metavar="DISROS")
     parser.add_option("-n", "--newformat", action="store_true", dest="newformat", default=False,
                       help="selects new format for the yarp input and output (NEWFORMAT)", metavar="NEWFORMAT")
+    parser.add_option("-f", "--config_filename", dest="config_filename", default="hands_kin.py", type="string", help="config filename for hands")
     (options, args) = parser.parse_args()
+
+    from arcospyu.config_parser.config_parser import import_config
+    hands_kin=import_config(options.config_filename)
 
     if not options.dis_ros:
         rospub = ROSPublisher()
 
-    import sahand
     left_hand=sahand.PORT_2
 
     basename="/sahand"
@@ -497,7 +501,7 @@ def main():
     yarp.Network.init()
 
     if options.sim:
-        sahboard=Sahboard_sim(basename)
+        sahboard=Sahboard_sim(basename, hands_kin)
     else:
         sahboard=sahand.Sahboard()
     #Instantiate the Hand
