@@ -262,7 +262,7 @@ class ROSPublisher:
 
 class Finger_sim(object):
     def __init__(self,port,basename,finger_num, hands_config):
-        sys.path.append("../../temp/hand_cart")
+        #sys.path.append("../../temp/hand_cart")
         from cmoc.robot.joint_controller import Controller_mass_sim, Controller_type
         import time
         self.enabled=True

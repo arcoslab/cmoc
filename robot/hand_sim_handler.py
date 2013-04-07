@@ -6,8 +6,8 @@ sys.path.append("../sahand_api")
 from numpy import array,identity,zeros, dot, pi, concatenate, diag
 from numpy.linalg import pinv, svd
 import yarp
-from hands_kin import fingers_lim,fingers_coupling, motor_locked_joints,sensor_locked_joints, sensor_finger_coupling
-import hands_kin as kin
+#from hands_kin import fingers_lim,fingers_coupling, motor_locked_joints,sensor_locked_joints, sensor_finger_coupling
+#import hands_kin as kin
 import numpy
 #sys.path.append("../../../../control/motionControl")
 #sys.path.append("../python-pyrovito")
@@ -252,17 +252,19 @@ class Kinematics(object):
 
         #kinematics
         self.parent=parent
-        from hands_kin import hands_kin
+        self.config_hand=self.parent.config_hand
+        ch=self.config_hand
+        #from hands_kin import hands_kin, fingers_lim, fingers_coupling, motor_locked_joints, sensor_locked_joints, sensor_finger_coupling
         from PyKDL import Chain,ChainFkSolverPos_recursive,JntArray,Frame
         from PyKDL import ChainFkSolverVel_recursive,FrameVel
         from PyKDL import ChainJntToJacSolver, Jacobian, JntArrayVel
         from PyKDL import ChainIkSolverVel_wdls, Twist
-        self.segments=hands_kin[handedness][self.parent.num_finger]
-        self.limits=fingers_lim[self.parent.num_finger]
-        self.coupling_matrix=fingers_coupling[self.parent.num_finger]
-        self.sensor_finger_coupling=sensor_finger_coupling
-        self.motor_locked_joints=motor_locked_joints[self.parent.num_finger]
-        self.sensor_locked_joints=sensor_locked_joints[self.parent.num_finger]
+        self.segments=ch.hands_kin[handedness][self.parent.num_finger]
+        self.limits=ch.fingers_lim[self.parent.num_finger]
+        self.coupling_matrix=ch.fingers_coupling[self.parent.num_finger]
+        self.sensor_finger_coupling=ch.sensor_finger_coupling
+        self.motor_locked_joints=ch.motor_locked_joints[self.parent.num_finger]
+        self.sensor_locked_joints=ch.sensor_locked_joints[self.parent.num_finger]
         print "Motor_locked", self.motor_locked_joints
         print "Sensor_locked", self.sensor_locked_joints
 
@@ -391,7 +393,8 @@ class Kinematics(object):
         #TODO: check for negative values in all the solvers calculations
         
 class Finger(object):
-    def __init__(self,num_finger,handedness):
+    def __init__(self, config_hand, num_finger,handedness):
+        self.config_hand=config_hand
         self.handedness=handedness
         self.num_finger=num_finger
         if self.num_finger==THUMB:
@@ -532,7 +535,7 @@ class Finger(object):
         self.cur_forces=self.kinematics.forces
         return(self.cur_forces)
 
-def controller_f(cmd_queue,ack_queue,handedness,sahand_number,portprefix,sahand_port_name_prefix,cycle_frequency=5.0):
+def controller_f(cmd_queue,ack_queue,handedness,sahand_number,portprefix,sahand_port_name_prefix, config_hand, cycle_frequency=5.0):
     import signal
     sequence_number=0
     angles_field=range(3)
@@ -545,7 +548,7 @@ def controller_f(cmd_queue,ack_queue,handedness,sahand_number,portprefix,sahand_
     fingers=[]
     num_fingers_from_server=4
     for num_finger in xrange(num_fingers_from_server):
-        fingers.append(Finger(num_finger,handedness))
+        fingers.append(Finger(config_hand, num_finger,handedness))
     yarp.Network.init()
     hand_port=yarp.BufferedPortBottle()
     hand_port.open(portprefix+client_port_name_suffix+str(sahand_number))
@@ -732,17 +735,18 @@ class Hand(object):
     when we select to use the sahand internal controller, the other process only relays the information from here.
     This class creates an object for each finger, each finger have an associated controller, each finger can have a different controller at the same time.
     '''
-    def __init__(self,handedness="right",sahand_number=0,portprefix="",sahand_port_name_prefix="/sahand"):
+    def __init__(self,config_hand, handedness="right",sahand_number=0,portprefix="",sahand_port_name_prefix="/sahand"):
+        self.config_hand=config_hand
         self.cmd_queue=Queue()
         self.ack_queue=Queue()
         self.sahand_number=sahand_number
-        self.controller_p=Process(target=controller_f,args=(self.cmd_queue,self.ack_queue,handedness,self.sahand_number,portprefix,sahand_port_name_prefix))
+        self.controller_p=Process(target=controller_f,args=(self.cmd_queue,self.ack_queue,handedness,self.sahand_number,portprefix,sahand_port_name_prefix, self.config_hand))
         self.handedness=handedness
         self.fingers=[]
 #        self.fingers_string=["thumb","first","middle","ring"]
         self.num_fingers_from_server=4
         for num_finger in xrange(self.num_fingers_from_server):
-            self.fingers.append(Finger(num_finger,handedness))
+            self.fingers.append(Finger(self.config_hand, num_finger,handedness))
         self.controller_p.start()
 #        for i in xrange(num_fingers_from_server):
 #            self.fingers_state.append([])
