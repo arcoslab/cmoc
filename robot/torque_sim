@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2010 Technische Universitaet Muenchen, Informatik Lehrstuhl IX.
 # Author: Federico Ruiz-Ugalde
 #
@@ -268,7 +268,7 @@ def main():
     simulation_on=options.sim
     config_lwr_right=options.config_dir_arms+"/config-lwr-right.py"
     config_lwr_left=options.config_dir_arms+"/config-lwr-left.py"
-    raw_input("This program is going to move the thumb angle, be sure the hand is away of things, press enter to continue")
+    #raw_input("This program is going to move the thumb angle, be sure the hand is away of things, press enter to continue")
 
     sim_torques=Sim_torques(config_lwr_right, config_lwr_left, config_hands)
 
