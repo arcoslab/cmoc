@@ -4,7 +4,7 @@ from distutils.core import setup
 
 
 setup(name='cmoc',
-      version='1.0',
+      version='0.1',
       description='Compact Models for Object Control',
       author='Federico Ruiz Ugalde',
       author_email='memeruiz@gmail.com',
