@@ -1,0 +1,589 @@
+#!/usr/bin/python
+# Copyright (c) 2011 Technische Universitaet Muenchen, Informatik Lehrstuhl IX.
+# Author: Federico Ruiz-Ugalde
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+import sys, time, LS
+sys.path.append("../../control/motionControl")
+#sys.path.append("../../tools/python/rawkey")
+from numpy import array, identity, dot, concatenate, sign, cross, arccos, pi, arctan, tan, cos, sin, sign, exp, arctan2
+from numpy.linalg import pinv, inv, norm
+from arcospyu.yarp_tools.yarp_comm_helpers import new_port, readListPort, write_narray_port
+from pyrovito.pyrovito_utils import Roboviewer_objects
+from arcospyu.kdl_helpers import rot_vector_angle, my_adddelta, my_diff, my_get_euler_zyx
+from arcospyu.control.control_loop import Controlloop
+
+#from helpers import Roboviewer_objects, Joint_sim, Finger_sim, Hand_sim, Controlloop, kdlframe_to_narray, narray_to_kdlframe, narray_to_kdltwist, kdltwist_to_narray, rot_vector_angle, my_adddelta, my_get_euler_zyx
+#from rawkey import Raw_key, Keys
+import box as ps
+from scipy.signal import iirfilter, lfilter, lfiltic
+
+class Filter():
+    def __init__(self, order=2, freq=0.7,y=[],x=[]):
+         self.b,self.a=iirfilter(order, freq, btype="lowpass")
+         if len(y)>0:
+             print "here"
+             self.z=lfiltic(self.b,self.a, y)
+         else:
+             self.z=array([0.]*order)
+         self.z=lfiltic(self.b,self.a, y,x=x)
+    
+    def filter(self,raw_data):
+        print "Raw", array(raw_data)
+        y,self.z=lfilter(self.b,self.a,raw_data,zi=self.z, axis=0)
+        return(y)
+         
+
+def homo_matrix(rot_m=identity(3),trans=array([0.]*3)):
+    m=identity(4)
+    m[:3,:3]=rot_m
+    m[:3,3]=trans
+    return(m)
+
+def rot_z(angle):
+    return(array([[cos(angle), -sin(angle), 0.],
+                  [sin(angle), cos(angle),0.],
+                  [0.,0.,1.]]))
+
+def angle_from_a_to_b(a,b):
+    s=sign(cross(a,b))
+    #print "s", s
+    if s==0.:
+        s=1.
+    return(arccos(min(dot(a,b),1.))*s)
+
+def vo_to_vc(vo_local,contact_pos_local,fmax,mmax):
+    A=ps.forces_to_no_map(fmax,mmax)
+    B_inv=ps.nc_to_forces_map(fmax,mmax,contact_pos_local)
+    C=ps.force_c_to_force_o_map(contact_pos_local)
+
+    #system calculation
+    P=dot(A,dot(C,B_inv))
+    P_inv=pinv(P)
+    vc_local=dot(P_inv,vo_local)/mmax**2
+    return(vc_local)
+
+def vector_saturation(vector_min, vector_max, vector):
+    angle_min_max=arccos(dot(vector_min,vector_max)/(norm(vector_min)*norm(vector_max)))
+    angle_max=arccos(dot(vector,vector_max)/(norm(vector)*norm(vector_max)))
+    angle_min=arccos(dot(vector,vector_min)/(norm(vector)*norm(vector_min)))
+    print "angles", angle_min_max, angle_max, angle_min
+    if (angle_max > angle_min_max) or (angle_min > angle_min_max):
+        print "limiting"
+        if angle_max < angle_min:
+            return(vector_max)
+        else:
+            return(vector_min)
+    return(vector)
+
+def vector_saturation2(vector1, vector2, vector_test):
+    #saturates the direction
+    vector1n=vector1/norm(vector1)
+    vector2n=vector2/norm(vector2)
+    if norm(vector_test) > 0.00000001:
+        vector_testn=vector_test/norm(vector_test)
+    else:
+        vector_testn=array([1.0,0.,0.])
+    #print "vector1n", vector1n, "vector2n", vector2n, "vector test", vector_testn
+    proj_vector1n=dot(vector_testn,vector1n)
+    proj_vector2n=dot(vector_testn,vector2n)
+    #if proj_vector1n<0. or proj_vector2n<0.:
+    #    print "input vector not in the expected direction", proj_vector1n, proj_vector2n
+        #return(array([0.,0.,0.]))
+    if proj_vector1n<=proj_vector2n:
+        # test is done using vector1n
+        proj_vector2n_in_1n=dot(vector1n,vector2n)
+        if proj_vector1n<proj_vector2n_in_1n:
+            print "Vector outside vector2n", vector2n
+            return(vector2n)
+        else:
+            return(vector_testn)
+    else:
+        #test using vector2n
+        proj_vector1n_in_2n=dot(vector2n,vector1n)
+        if proj_vector2n<proj_vector1n_in_2n:
+            print "Vector outside vector1n", vector1n
+            return(vector1n)
+        else:
+            return(vector_testn)
+
+class Control(Controlloop):
+
+    def visualize(self,points=[],vectors=[]):
+        for local,ref_frame,vis_id in points:
+            if len(local)==3:
+                #for points
+                pose=dot(ref_frame,homo_matrix(trans=local))
+            else:
+                #for frames
+                pose=dot(ref_frame,local)
+            self.view_objects.send_prop(vis_id,"pose",
+                                        pose.reshape(16).tolist())
+
+        for vector_local,ref_frame_vector,point_local,ref_frame_point,vis_id in vectors:
+            point=dot(ref_frame_point,homo_matrix(trans=point_local))
+            self.view_objects.send_prop(vis_id,"pose",
+                                        point.reshape(16).tolist())
+            vector=dot(ref_frame_vector[:3,:3],vector_local)
+            self.view_objects.send_prop(vis_id,"axis",0.5*vector/norm(vector))
+
+
+    def set_params(self,params):
+        #viewer
+        self.view_objects=Roboviewer_objects("/slider_control","/lwr/roboviewer",3000)
+        self.goal_id=self.view_objects.create_object("frame")
+        self.view_objects.send_prop(self.goal_id,"scale",[0.4,0.4,0.4])
+        self.view_objects.send_prop(self.goal_id,"timeout",[10])
+        #self.view_objects.send_prop(self.goal_id,"color",[0,1,0])
+
+        self.ncmin_id=self.view_objects.create_object("arrow")
+        self.view_objects.send_prop(self.ncmin_id,"scale",[0.5,0.5,0.125])
+        ncmin_id_offset=identity(4)
+        ncmin_id_offset[:3,3]=array([0.,0.,-1.])
+        self.view_objects.send_prop(self.ncmin_id,"pose_offset",ncmin_id_offset.reshape(16).tolist())
+        self.view_objects.send_prop(self.ncmin_id,"color",[0,1,1])
+        self.view_objects.send_prop(self.ncmin_id,"timeout",[-1])
+
+        self.ncmax_id=self.view_objects.create_object("arrow")
+        self.view_objects.send_prop(self.ncmax_id,"scale",[0.5,0.5,0.125])
+        ncmax_id_offset=identity(4)
+        ncmax_id_offset[:3,3]=array([0.,0.,-1.])
+        self.view_objects.send_prop(self.ncmax_id,"pose_offset",ncmax_id_offset.reshape(16).tolist())
+        self.view_objects.send_prop(self.ncmax_id,"color",[0,1,1])
+        self.view_objects.send_prop(self.ncmax_id,"timeout",[-1])
+
+        #model parameters
+        self.box_dim=[.5,0.5,0.3]
+        self.box_sides_angle=arctan(self.box_dim[1]/self.box_dim[0])
+        self.weight_force=1.
+        self.friction_finger_z_force=0.
+        self.friction_coef_object_table=1.
+        self.friction_coef_finger_object=0.4
+        self.fmax=self.friction_coef_object_table*(self.weight_force-self.friction_finger_z_force)
+        self.mmax_base=LS.calc_mmax_analytic(self.friction_coef_object_table,1.,self.box_dim[0],self.box_dim[1])
+        self.mmax=self.mmax_base*(self.weight_force-self.friction_finger_z_force)
+        print "fmax, mmax", self.fmax, self.mmax
+
+        # yarp ports
+        base_name="/planar_control"
+        self.finger_pose_out_port=new_port(base_name+"/xfinger:out",
+                                  "out", "/slider_sim/xfinger:in")
+        self.finger_pose=identity(4)
+        self.finger_sign=1
+
+        self.finger_pose[:3,3]=array([1*self.box_dim[0]/2.,-0.8*self.box_dim[1]/2,0.])
+        self.finger_pose[:3,3]=array([1*self.box_dim[0]/2.,0.7*self.box_dim[1]/2,0.])
+#        self.finger_pose[:3,3]=array([0*self.box_dim[0]/2.,self.box_dim[1]/2,0.])
+#        self.finger_pose[:3,3]=array([-1*self.box_dim[0]/2.,0.1*self.box_dim[1]/2,0.])
+#        self.finger_pose[:3,3]=array([0*self.box_dim[0]/2.,-self.box_dim[1]/2,0.])
+
+        #Goal
+        self.xo_ref=identity(4)
+        self.xo_ref[:3,3]=array([.5,0.,0.])
+        angle=-15.*pi/180.0
+        self.xo_ref[:3,3]=array([.6,0.,0.])
+        #angle=-0.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.xo_ref[:3,:3]=rot_vector_angle(table_normal,angle)
+        print "xo ref", self.xo_ref
+        #raw_input()
+
+        #getting current box position
+        self.xo_in_port=new_port(base_name+"/xo:in","in", "/slider_sim/xo:out", timeout=10.)
+        result=readListPort(self.xo_in_port,blocking=True)
+        if result:
+            self.xo=array(result).reshape((4,4))
+            #self.box_pose=array(result).reshape((4,4))
+            #The controller stabilizes to the origin. Here we transform coordinates so that the controller thinks is going to the origin.
+            self.box_pose=dot(inv(self.xo_ref), self.xo)
+        #self.box_pose=identity(4)
+        #self.box_pose[:3,3]=array([3.,2,0.])
+
+        self.finger_pose[:3,3]+=self.box_pose[:3,3]
+        self.finger_pose_out=array(self.finger_pose)
+
+
+        self.fc_in_port=new_port(base_name+"/ffinger:in","in", "/slider_sim/ffinger:out", timeout=10.)
+
+        self.vo=array([0.05,0.05,0.05])
+
+        self.last_time=time.time()
+        self.d_last=None
+        self.stop=False
+
+        self.vtest2_buff=array([0.]*6)
+        self.vtest2_buff_pos=0
+
+        #filter
+        order=5
+        freq=0.3
+        print "Filter", self.finger_pose_out[0,3]
+        self.filter_x=Filter(order=order,freq=freq,y=array([self.finger_pose_out[0,3]]*order),x=array([self.finger_pose_out[0,3]]*order))
+        self.filter_y=Filter(order=order,freq=freq,y=array([self.finger_pose_out[1,3]]*order),x=array([self.finger_pose_out[1,3]]*order))
+        self.control_ei=0.
+
+
+        self.pushing=False
+
+    def process(self):
+        goal_vis=identity(4)
+        goal_vis[:3,:3]=self.xo_ref[:3,:3]
+        goal_vis[:2,3]=self.xo_ref[:2,3]
+        goal_vis[2,3]=0.
+        self.view_objects.send_prop(self.goal_id,"pose",
+                                    goal_vis.reshape(16).tolist())
+
+        result=readListPort(self.xo_in_port,blocking=True)
+        if result:
+            #self.box_pose=array(result).reshape((4,4))
+            self.xo=array(result).reshape((4,4))
+            self.box_pose=dot(inv(self.xo_ref), self.xo)
+        result=readListPort(self.fc_in_port,blocking=False)
+        if result:
+            self.fc=array(result)
+
+
+        print
+        #print "box pos", self.box_pose[:3,:3]
+        print "box pos", self.xo[:3,3]
+        print "box pos control", self.box_pose[:3,3]
+
+        #ncmin, ncmax right side box
+        mu=0.8*self.friction_coef_finger_object #10 % security band
+
+        #rx, ry
+        rxy_global=self.finger_pose[:3,3]-self.box_pose[:3,3]
+        rxy=dot(inv(self.box_pose[:3,:3]),rxy_global)[:2]
+        rxy_angle=arctan2(rxy[1],rxy[0])
+        print "rxy", rxy, "rxy angle", rxy_angle*180./pi, "mu", mu
+
+        sliding_angle=0.7*self.box_sides_angle
+        stop_angle=0.9*self.box_sides_angle
+        if rxy_angle>-stop_angle and rxy_angle<stop_angle:
+            if rxy_angle>-sliding_angle:
+                print "Max sliding"
+                mu_max=0.9
+            else:
+                print "Max sat"
+                mu_max=mu
+            if rxy_angle<sliding_angle:
+                mu_min=0.9
+            else:
+                mu_min=mu
+#            mu_max=mu
+#            mu_min=mu
+            ncmax_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)-2*rxy[0]*rxy[1]*mu_max),
+                              -2*rxy[0]*rxy[1]+2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu_max,0.])
+            ncmin_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)+2*rxy[0]*rxy[1]*mu_min),
+                              -2*rxy[0]*rxy[1]-2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu_min,0.])
+            #LC_c_matrix=ps.nc_to_forces_map(self.fmax, self.mmax, rxy)
+            #table_face_normal=array([0.,0.,1.])
+            #finger_face_normal=array([1.,0.,0.])
+            #ncmax_loc,ncmin_loc,fc_max,fc_min=ps.nc_max_min(table_face_normal, finger_face_normal, self.friction_coef_finger_object, inv(LC_c_matrix))
+            ncmax=dot(self.box_pose[:3,:3],ncmax_loc)
+            ncmin=dot(self.box_pose[:3,:3],ncmin_loc)
+            print "right side"
+        elif (rxy_angle-pi/2.)>-0.9*(pi/2.-self.box_sides_angle) and (rxy_angle-pi/2.)<0.9*(pi/2.-self.box_sides_angle):
+            ncmax_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)-2*rxy[0]*rxy[1]*mu),
+                              -2*rxy[0]*rxy[1]+2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu,0.])
+            ncmin_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)+2*rxy[0]*rxy[1]*mu),
+                              -2*rxy[0]*rxy[1]-2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu,0.])
+            print "top side"
+        elif (rxy_angle+pi/2.)>-0.9*(pi/2.-self.box_sides_angle) and (rxy_angle+pi/2.)<0.9*(pi/2.-self.box_sides_angle):
+            ncmax_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)-2*rxy[0]*rxy[1]*mu),
+                              -2*rxy[0]*rxy[1]+2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu,0.])
+            ncmin_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)+2*rxy[0]*rxy[1]*mu),
+                              -2*rxy[0]*rxy[1]-2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu,0.])
+            print "lower side"
+        elif (((rxy_angle-pi)>-0.9*self.box_sides_angle) and ((rxy_angle-pi)<=0.)) or (((rxy_angle+pi)<0.9*self.box_sides_angle) and ((rxy_angle+pi)>=0.)):
+            ncmax_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)-2*rxy[0]*rxy[1]*mu),
+                              -2*rxy[0]*rxy[1]+2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu,0.])
+            ncmin_loc=-array([(2*((self.mmax**2/self.fmax**2)+rxy[1]**2)+2*rxy[0]*rxy[1]*mu),
+                              -2*rxy[0]*rxy[1]-2*((self.mmax**2/self.fmax**2)+rxy[0]**2)*mu,0.])
+            print "left side"
+
+        ncmax_loc/=abs(ncmax_loc[0])
+        ncmin_loc/=abs(ncmin_loc[0])
+        print "mcmax_loc", ncmax_loc, "ncmin_loc", ncmin_loc
+
+
+        #rotate to finger angle
+        rot_frame=identity(4)
+        rot_frame[:3,:3]=rot_z(-rxy_angle)
+        #box_rot_finger=dot(rot_frame,self.box_pose)
+        box_rot_finger=dot(self.box_pose, rot_frame)
+
+        # d, e, phi_a, phi, n
+        d=norm(box_rot_finger[:2,3])
+        b_e=1.2
+        n=sign(self.finger_sign)*arctan(box_rot_finger[1,3]/abs(box_rot_finger[0,3]))
+        n=arctan2(box_rot_finger[1,3],(box_rot_finger[0,3]))
+        phi_a=(2./b_e)*n
+        if phi_a>pi*0.9:
+            phi_a=0.9*pi
+        if phi_a<-0.9*pi:
+            phi_a=-0.9*pi
+        phi=my_get_euler_zyx(self.box_pose[:3,:3])[0]
+        e=phi_a-phi
+
+        r=norm(rxy[:2]) #do the right thing
+        print "phi", phi*180/pi, "d", d, "n", n*180/pi, "phi_a", phi_a*180/pi, "e", e*180/pi, "r", r
+        a=1/(1+self.fmax**2*r**2/self.mmax**2)
+        b=r/((self.mmax**2/self.fmax**2)+r**2)
+        print "a:", a, "b:", b
+        c1=5.
+        c2=4.
+        c3=4.
+
+        #with pseudoinverse
+        A=array([[cos(n-phi),a*sin(n-phi)],
+                 [-2*sin(n-phi)/(b_e*d),a*(2/(b_e*d))*cos(n-phi)-b],
+                 [0,b]])
+        A=array([[cos(n-phi),a*sin(n-phi)],
+                 [-2*sin(n-phi)/(b_e*d),-b],
+                 [0,b]])
+        pA=pinv(A)
+#        print "Matrix", A
+#        print "inverse", pA
+        if d>1.:
+            d_extra=1.
+        else:
+            d_extra=d
+        if d>0.05:
+            d_extra2=0.05
+        else:
+            d_extra2=0.05
+        y=array([-c1*d_extra2,-c2*e*d_extra**2,-c3*phi/exp(d)])
+        #y=array([-c1*d,-c2*e, -c3*phi/exp(d)])
+        #y=array([-c1*cos(n-phi)**2/(cos(n-phi)**2+e**2)*d,-(c2+c1*d**2/(cos(n-phi)**2+e**2))*e, c2*e+(c1/(cos(n-phi)**2+e**2))*((2/b_e)*cos(n-phi)*sin(n-phi)+d**2*e)])
+        vc_local3=dot(pA,y)
+#        print "vc local3", vc_local3
+
+        #Intuitive
+        #forward velocity control rule 
+        finger_speed=0.02
+        vtest1=-finger_speed #*self.finger_sign
+        d_low=self.box_dim[0]/3 #should depend on the size of the object but only there must be a minimum for the precision of the sensors 
+        d_low=0.001
+        if d<d_low:
+            print "Slowing down"
+            #forward velocity control rule (during slow down)
+            vtest1=(vtest1/d_low)*d
+            if not self.d_last:
+                self.d_last=d
+                self.stop=False
+            if self.d_last<d:
+                self.stop=True
+            else:
+                self.d_last=d
+        if self.stop:
+            vtest1=0.
+        vtest2=e*abs(vtest1)*205.0*d**2
+        if d>0.4:
+            d_extra=0.4
+        else:
+            d_extra=d
+#        d_extra=d
+#        self.control_ei+=-0.05*vtest1*e*b
+        e_boundary=2.*pi/180.
+        #lateral velocity control rule for aligning with auxiliary angle
+        #control_e=-30.*e*vtest1+self.control_ei
+        control_e=-420.*e*vtest1+self.control_ei
+        #if abs(e)>e_boundary:
+        #    control_e=-3.*e*vtest1*(b*d_extra)**2+self.control_ei
+        #else:
+        #    control_e_max=-3.*e_boundary*vtest1*(b*d_extra)**2
+        #    control_e_min=3.*e_boundary*vtest1*(b*d_extra)**2
+        #    print "Sliding mode, control max min:", control_e_max, control_e_min
+#            max=(
+        #    control_e=-10.*e*vtest1
+#        control_e=(0.6*e+0.6*2*d*tan(n-phi)/b_e)/(b/a)
+
+#        self.control_ei+=0.01*e
+#        control_e=0.1*e+self.control_ei
+#        control_e=-35.*e*vtest1/b
+        #lateral velocity control rule for aligning with final angle
+        control_phi=25.*phi*vtest1
+#        control_phi=0.
+        #complete lateral velocity control rule
+        vtest2=control_e*(d_extra)**2+control_phi/(exp(b*d/a))
+#        vtest2/=b
+        #vtest2*=self.finger_sign
+#        vtest2=self.filter.filter(array([vtest2]))
+
+        print "Control parts, v1:", vtest1, "e:", control_e, "phi:", control_phi
+        if abs(n)<1*pi/180.:
+            print "error low"
+#            vtest2=0.
+        u=0.7 #velocity ratio limit (limits the lateral speed to u time the forward speed)
+        if abs(vtest2)>u*abs(vtest1):
+            vtest2=sign(vtest2)*u*abs(vtest1)
+        #vtest2 filter
+        self.vtest2_buff[self.vtest2_buff_pos]=vtest2
+        self.vtest2_buff_pos+=1
+        if self.vtest2_buff_pos>=len(self.vtest2_buff):
+            self.vtest2_buff_pos=0
+#        vtest2=self.vtest2_buff.mean()
+        vc_local4=array([vtest1,vtest2,0])
+        vc_local4=dot(rot_z(rxy_angle),vc_local4)
+        vc_local4=vc_local4[:2]
+
+        #analytical
+        v2=(-c2*e-2*c1*d*tan(n-phi)/(b_e*d))/((2./(b_e*d))*tan(n-phi)*sin(n-phi)+(2./(b_e*d))*cos(n-phi)-(b/a))
+        v1=(-c1*d-sin(n-phi)*v2)/cos(n-phi)
+        vc1=v1
+        vc2=v2/a
+#        print "vc1", vc1, "vc2", vc2
+        vc_local2=array([vc1,vc2])
+        vc_dir=vc_local2/norm(vc_local2)
+#        print "vcdir", vc_dir
+        #vc_dir=array([-1.,0.])
+        #print "angle1", arccos(dot(vc_dir[:2],ncmax_loc[:2]))*180./pi, "angle2", arccos(dot(vc_dir[:2],ncmin_loc[:2]))*180./pi
+        #vc_sat_temp=vector_saturation(ncmin_loc,ncmax_loc,vc_local2[:2])
+        #vc_sat_temp/=norm(vc_sat_temp)
+        #for the left side
+        #vc_local2[:2]=abs(vc_local2[0])*vc_sat_temp
+        #print "saturated vector", vc_local2
+        #vc_local2*=2.
+        #if norm(vc_local2)> 0.2:
+        #    print "limiting speed"
+            #vc_local2*=0.2/norm(vc_local2)
+        vc_local2=concatenate((vc_local4,array([0.])))
+
+        # angle deviation calculation
+        self.object_goal=self.xo_ref[:2,3]-self.box_pose[:2,3]
+        self.object_goal/=norm(self.object_goal)
+        self.dir_box_finger=self.box_pose[:2,3]-self.finger_pose[:2,3]
+        self.dir_box_finger/=norm(self.dir_box_finger)
+        self.finger_goal=self.xo_ref[:2,3]-self.finger_pose[:2,3]
+        self.finger_goal/=norm(self.finger_goal)
+        #print "dir vector", self.object_goal, "dir_box_finger", self.dir_box_finger
+
+        #proportional control
+        xo_error=array([0.]*3)
+        xo_error[2]=angle_from_a_to_b(self.finger_goal,self.object_goal)
+        xo_error[:2]=self.xo_ref[:2,3]-self.box_pose[:2,3]
+#        if norm(xo_error[2])<1.*pi/180.0:
+#            xo_error[2]=0.
+        slow_down_dist=0.5*min(self.box_dim[0],self.box_dim[1])
+        angle_dist_norm=norm(xo_error[:2])/xo_error[2]
+        #xo_error[2]/=angle_dist_norm
+        #if norm(xo_error[:2])<slow_down_dist:
+        #    percent=norm(xo_error[:2])/slow_down_dist
+        #    kw=1.2*0.
+        #else:
+        #    kw=3.
+        kw=4.*norm(xo_error[:2])
+        kw=30.
+        #print "kw", kw
+        kxy=0.1/norm(xo_error[:2])
+        #if norm(xo_error[:2])<0.05:
+        #    modulate=0.
+        #else:
+        #    modulate=1.
+        modulate=1.
+        #kxy=1.
+        #kw=kxy*30.
+        kxy=0.1
+        kw=kxy*100.
+        k=modulate*array([[kxy,0.,0.],
+                 [0.,kxy,0.],
+                 [0.,0.,kw]])
+        #print "Error", xo_error, norm(xo_error[:2]), slow_down_dist
+        self.vo=dot(k,xo_error)
+        #if norm(self.vo[:2])>0.5:
+        #    self.vo[:2]/=norm(self.vo[:2])
+        #    self.vo[:2]*=0.5
+        #print "Vo", self.vo
+
+        vo_local=dot(inv(self.box_pose[:3,:3]),self.vo)
+        finger_pos_local=dot(inv(self.box_pose),self.finger_pose)
+        contact_pos_local=finger_pos_local #this only if the finger is really
+        #touching
+        vc_local=concatenate((vo_to_vc(vo_local,
+                                       contact_pos_local[:3,3],
+                                       self.fmax,self.mmax), array([0.])))
+        #max_finger_speed=0.5
+        #if norm(vc_local)>max_finger_speed:
+        #    print "limiting speed"
+        #    #vc_local=max_finger_speed*vc_local/norm(vc_local)
+        #print "Vc local", vc_local
+        #if norm(xo_error[:2])>slow_down_dist:
+        #    print "constant speed"
+        #    speed=max_finger_speed
+        #elif norm(xo_error[:2])>0.1*slow_down_dist:
+        #    print "slowing down"
+        #    speed=max_finger_speed-(slow_down_dist-norm(xo_error[:2]))*(max_finger_speed/(0.9*slow_down_dist))
+        #else:
+        #    print "stopped"
+        #    speed=0.
+        #print "Speed", speed
+        #vc_local*=(speed/norm(vc_local))
+        #vc=concatenate((dot(self.box_pose[:3,:3],vc_local),array([0.]*3)))
+
+        #saturating vc
+        vc=dot(self.box_pose[:3,:3],vc_local2)
+        print "nc max min" , ncmax, ncmin, "vc raw:", vc
+        vc_sat_temp=norm(vc)*vector_saturation2(ncmin,ncmax,vc)
+        sat_speed=finger_speed
+        if norm(vc_sat_temp)> sat_speed:
+            print "Limiting speed"
+            vc_sat_temp=sat_speed*vc_sat_temp/norm(vc_sat_temp)
+        #nc_extra=ncmax_loc
+        #nc_extra[1]-=0.4
+        #vc_sat_temp=dot(self.box_pose[:3,:3],0.05*nc_extra)
+        #vc_sat_temp=0.05*vector_saturation2(ncmin,ncmax,vc_sat_temp)
+        vc=concatenate((vc_sat_temp,array([0.]*3)))
+        #vc_sat_temp/=norm(vc_sat_temp)
+
+#        vc=array([0.]*6)
+#        vc=concatenate((dot(self.box_pose[:3,:3],vc_local2),array([0.]*3)))
+        print "Vc", vc
+
+        #raw_input()
+
+        self.cur_time=time.time()
+        dt=self.cur_time-self.last_time
+        self.last_time=self.cur_time
+        self.finger_pose=my_adddelta(self.finger_pose,vc,dt)
+        self.finger_pose_out=array(self.finger_pose)
+        self.finger_pose_out[0,3]=self.filter_x.filter(array([self.finger_pose_out[0,3]]))
+        self.finger_pose_out[1,3]=self.filter_y.filter(array([self.finger_pose_out[1,3]]))
+        if self.stop:
+            self.finger_pose_out[:2,3]=self.finger_pose[:2,3]
+        print "finger pose", self.finger_pose[:2,3], self.finger_pose_out[:2,3]
+        enable_filter=False
+        if enable_filter:
+            self.finger_pose_out2=dot(self.xo_ref, self.finger_pose_out)
+            write_narray_port(self.finger_pose_out_port,self.finger_pose_out2[:3,3])
+        else:
+            self.finger_pose2=dot(self.xo_ref, self.finger_pose)
+            print "Finger pose global", self.finger_pose2[:3,3]
+            write_narray_port(self.finger_pose_out_port,self.finger_pose2[:3,3])
+            pass
+
+
+        vis_vectors=[(ncmin,identity(4), self.finger_pose2[:3,3], identity(4), self.ncmin_id)]
+        vis_vectors+=[(ncmax,identity(4), self.finger_pose2[:3,3], identity(4), self.ncmax_id)]
+        vis_points=[]
+        self.visualize(points=vis_points, vectors=vis_vectors)
+
+
+def main():
+    control_loop=Control(15.)
+    control_loop.loop()
+
+if __name__=="__main__":
+    main()
