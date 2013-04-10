@@ -32,8 +32,8 @@ def main():
 
     joints=config.nJoints
 
-    port_base_name="joint_sim"
-    portbn=config.robotarm_portbasename+"/"+port_base_name
+    port_base_name="/joint_sim"
+    portbn=config.robotarm_portbasename+port_base_name
     qvin_port=yarp.BufferedPortBottle()
     qvinpn=portbn+"/qvin"
     qvin_port.open(qvinpn)
@@ -50,7 +50,7 @@ def main():
     sim_parampn=portbn+"/sim_param"
     sim_param_port.open(sim_parampn)
     stiffness_port=yarp.BufferedPortBottle()
-    stiffnesspn=portbn+"/robot/stiffness"
+    stiffnesspn=config.robotarm_portbasename+"/robot/stiffness"
     stiffness_port.open(stiffnesspn)
 
     robotbn=config.robotarm_portbasename

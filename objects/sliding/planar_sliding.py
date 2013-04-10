@@ -15,28 +15,26 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# This program simulates the sliding movement of a box on top of a plane. It is meant to be used together with roboviewer and xfinger_feeder or slider_control_simple
-
-
 import sys
 sys.path.append("../../control/motionControl")
 sys.path.append("../../tools/python/computer_graphics")
 from pyrovito.pyrovito_utils import Roboviewer_objects
 from arcospyu.kdl_helpers import rot_vector_angle, my_adddelta, my_diff
 from arcospyu.control.control_loop import Controlloop
+
+#from helpers import Roboviewer_objects, Joint_sim, Finger_sim, Hand_sim, Controlloop, kdlframe_to_narray, narray_to_kdlframe, narray_to_kdltwist, kdltwist_to_narray, rot_vector_angle, my_adddelta, my_diff
 from numpy import array,identity, concatenate,dot ,sqrt, cross, arctan, pi
 from numpy.linalg import norm,inv
 from numpy.random import normal
 from PyKDL import Frame,addDelta, Twist, diff
 from arcospyu.computer_graphics.pluecker_test import polygon_pluecker_test, triangle_ray_intersection, plane_ray_intersection
-import time
-from cmoc.objects.sliding import LS
-from arcospyu.yarp_tools.yarp_comm_helpers import new_port, readListPort, write_narray_port
-
-def fc_to_nc_matrix(fmax,mmax,contact_pos):
-    m=2*array([[mmax**2/fmax**2+contact_pos[1]**2,-contact_pos[0]*contact_pos[1]],
-               [-contact_pos[0]*contact_pos[1],mmax**2/fmax**2+contact_pos[0]**2]])
-    return(m)
+#from pluecker_test import polygon_pluecker_test, triangle_ray_intersection, plane_ray_intersection
+import LS, time
+from arcospyu.yarp_tools.yarp_comm_helpers import new_port, readListPort, write_narray_port, write_bottle_lists
+from utils import Force_handle
+from model_functions import fc_to_nc_matrix
+from object_params import Object_params
+from box import nc_to_forces_map, forces_to_no_map, force_c_to_force_o_map
 
 def norm_nc_under_vc(fmax,mmax,contact_pos,fc2):
     nc=mmax*sqrt(1/( (mmax**2/fmax**2+contact_pos[1]**2)*fc2[0]**2 +
@@ -58,30 +56,11 @@ def norm_Vc_to_norm_Vo(contact_pos_local,cor_local,Vc):
     norm_Vo=norm(Vc)*norm_rocor/norm_rccor
     return(norm_Vo)
 
-def forces_to_no_map(fmax,mmax):
-    A=array([[2/fmax**2,0,0], # maps forces to nc
-             [0,2/fmax**2,0],
-             [0,0,2/mmax**2]])
-    return(A)
-
-def nc_to_forces_map(fmax,mmax,contact_local):
-    a=(4*(mmax**2/fmax**2+contact_local[1]**2)*(mmax**2/fmax**2+contact_local[0]**2)
-       -4*contact_local[0]**2*contact_local[1]**2)
-    B_inv=(2./a)*array( #maps nc to forces
-        [[mmax**2/fmax**2+contact_local[0]**2,contact_local[0]*contact_local[1]],
-         [contact_local[0]*contact_local[1],mmax**2/fmax**2+contact_local[1]**2]])
-    return(B_inv)
 
 def forces_to_nc_map(fmax,mmax,contact_local):
     B=2*array([[mmax**2/fmax**2+contact_local[1]**2,-contact_local[0]*contact_local[1]],
                [-contact_local[0]*contact_local[1],mmax**2/fmax**2+contact_local[0]**2]])
     return(B)
-
-def force_c_to_force_o_map(contact_local):
-    C=array([[1,0], #maps elipsoid to contact point
-             [0,1],
-             [-contact_local[1],contact_local[0]]])
-    return(C)
 
 def vo_to_vc_map(contact_local):
     D=array([[1,0,-contact_local[1]],
@@ -245,7 +224,6 @@ def find_finger_object_face(vfinger,pos_finger,vertices_faces, box_planes):
                     return(True,dist_min[0])
     return(False,None)
 
-
 class Loop(Controlloop):
 
     def visualize(self,points=[],vectors=[]):
@@ -264,14 +242,18 @@ class Loop(Controlloop):
             self.view_objects.send_prop(vis_id,"pose",
                                         point.reshape(16).tolist())
             vector=dot(ref_frame_vector[:3,:3],vector_local)
-            self.view_objects.send_prop(vis_id,"axis",0.5*vector/norm(vector))
+            self.view_objects.send_prop(vis_id,"axis",self.arrow_length*vector/norm(vector))
 
     def set_params(self,params):
+        self.arrow_length=0.1
         vars(self).update(params) #takes the dictionary params and puts everything in variables of the class
         base_name="/slider_sim"
-        self.xfinger_in_port=new_port(base_name+"/xfinger:in","in", "/xfinger_feeder/xfinger:out",timeout=1.)
+        #self.xfinger_in_port=new_port(base_name+"/xfinger:in","in", "/xfinger_feeder/xfinger:out",timeout=1.)
+        self.hforce=Force_handle(base_name, "/torque_sim/force_out")
+        self.finger=3
+
         self.xo_out_port=new_port(base_name+"/xo:out","out", "/planar_control/xo:in", timeout=1.)
-        self.fc_out_port=new_port(base_name+"/ffinger:out","out", "/ffinger_out", timeout=1.)
+        self.fc_out_port=new_port(base_name+"/ffinger:out","out", "/torque_sim/force_in", timeout=1.)
         #do a parameter input port (for simulation only)
         #variables
         #robot-object contact
@@ -294,59 +276,86 @@ class Loop(Controlloop):
         #self.contact_pose[:3,3]=array([-1,-0.5,0.])
 
         #box
-        self.box_dim=[.5,0.5,0.3]
-        self.box_center=array([0.,0.,0])
-        self.box_planes=[[(1.,0.,0),(self.box_dim[0]/2.,0.,0.)], #(normal, point)
-                        [(-1.,0.,0),(-self.box_dim[0]/2.,0.,0.)],
-                        [(0.,1.,0),(0.,self.box_dim[1]/2.,0.)],
-                        [(0.,-1.,0),(0,-self.box_dim[1]/2.,0.)],
-                        [(0.,0.,1),(0.,0.,self.box_dim[2]/2.)],
-                        [(0.,0.,-1),(0.,0.,-self.box_dim[2]/2.)]]
-        self.box_vertices={
-            0: array([[self.box_dim[0]/2,-self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [self.box_dim[0]/2,self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [self.box_dim[0]/2,self.box_dim[1]/2,self.box_dim[2]/2],
-                      [self.box_dim[0]/2,-self.box_dim[1]/2,self.box_dim[2]/2]]),
-            1: array([[-self.box_dim[0]/2,-self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,-self.box_dim[1]/2,self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,self.box_dim[1]/2,self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,self.box_dim[1]/2,-self.box_dim[2]/2]]),
-            2: array([[-self.box_dim[0]/2,self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,self.box_dim[1]/2,self.box_dim[2]/2],
-                      [self.box_dim[0]/2,self.box_dim[1]/2,self.box_dim[2]/2],
-                      [self.box_dim[0]/2,self.box_dim[1]/2,-self.box_dim[2]/2]]),
-            3: array([[self.box_dim[0]/2,-self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [self.box_dim[0]/2,-self.box_dim[1]/2,self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,-self.box_dim[1]/2,self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,-self.box_dim[1]/2,-self.box_dim[2]/2]]),
-            4: array([[-self.box_dim[0]/2,-self.box_dim[1]/2,self.box_dim[2]/2],
-                      [self.box_dim[0]/2,-self.box_dim[1]/2,self.box_dim[2]/2],
-                      [self.box_dim[0]/2,self.box_dim[1]/2,self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,self.box_dim[1]/2,self.box_dim[2]/2]]),
-            5: array([[-self.box_dim[0]/2,self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [self.box_dim[0]/2,self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [self.box_dim[0]/2,-self.box_dim[1]/2,-self.box_dim[2]/2],
-                      [-self.box_dim[0]/2,-self.box_dim[1]/2,-self.box_dim[2]/2]])}
+        self.obj_par=Object_params()
 
         self.finger_object_face=1
         self.table_object_face=5
-        self.view_objects.send_prop(self.box_id,"scale",self.box_dim)
+        self.view_objects.send_prop(self.box_id,"scale",self.obj_par.box_dim)
         box_id_offset=identity(4)
-        box_id_offset[:3,3]=array([0.,0.,0.])
+        box_id_offset[:3,3]=array([0.,0.,-0.5])
         self.view_objects.send_prop(self.box_id,"pose_offset",
                                     box_id_offset.reshape(16).tolist())
-        self.weight_force=2.
-        self.friction_finger_z_force=0.
-        self.friction_coef_object_table=1.
-        self.friction_coef_finger_object=0.4
-        self.fmax=self.friction_coef_object_table*(self.weight_force-self.friction_finger_z_force)
-        self.mmax_base=LS.calc_mmax_analytic(self.friction_coef_object_table,1.,self.box_dim[0],self.box_dim[1])
-        self.mmax=self.mmax_base*(self.weight_force-self.friction_finger_z_force)
-        print "fmax, mmax", self.fmax, self.mmax
 
         #objects
+        table_height=0.85
+        object_height=table_height+self.obj_par.box_dim[2]/2.
+
+        #object in front (works)
         self.box_pose=identity(4)
-        self.box_pose[:3,3]=array([1.85,0.2,0.])
+        self.box_pose[:3,3]=array([0.8, 0.1,object_height])
+        angle=-15.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+        #object in front 2 (works)
+        self.box_pose=identity(4)
+        self.box_pose[:3,3]=array([0.8, 0. ,object_height])
+        angle=-15.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+        #object in front 2 (works)
+        self.box_pose=identity(4)
+        self.box_pose[:3,3]=array([0.82, -0.1 ,object_height])
+        angle=-5.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+
+
+
+        #object to the right away side 45
+        self.box_pose=identity(4)
+        self.box_pose[:3,3]=array([0.9, -0.5,object_height])
+        angle=-45*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+
+
+
+        #Goal 3.1 object to the right away side
+        self.box_pose=identity(4)
+        self.box_pose[:3,3]=array([1.05, -0.5,object_height])
+        angle=-0.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+
+        #Goal 2.1 object to the right away side, not so far away
+        self.box_pose=identity(4)
+        self.box_pose[:3,3]=array([0.86, -0.45,object_height])
+        angle=-45.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+
+        #Goal 4.1 object to the right away side, not so far away, testing, starting away from corners
+        self.box_pose=identity(4)
+        self.box_pose[:3,3]=array([1., -0.2,object_height])
+        angle=5.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+        #Goal 5.1 object to the right away side, not so far away, testing, starting away from corners
+        self.box_pose=identity(4)
+        self.box_pose[:3,3]=array([0.9, -0.1,object_height])
+        angle=-5.*pi/180.0
+        table_normal=array([0.,0.,1.])
+        self.box_pose[:3,:3]=rot_vector_angle(table_normal,angle)
+
+
+
         self.box_vel_twist=array([0.0,0.0,0.,0.,0.,0.])
         self.box_pose_out=array(self.box_pose)
 
@@ -354,6 +363,9 @@ class Loop(Controlloop):
         self.test_pose[1,3]=-1.
         self.test_vel_twist=array([0.,0.0,0.,0.,0.,0.])
         self.test_vel_twist[:3]=self.finger_vel_twist[:3]
+
+        self.cor_local=array([0.]*3)
+
 
     def process(self):
         vis_vectors=[]
@@ -363,23 +375,19 @@ class Loop(Controlloop):
         #reading finger pose and calculating new speed
         self.new_finger_pose=identity(4)
         #print "here"
-        result=readListPort(self.xfinger_in_port,blocking=False)
         self.cur_time=time.time()
         dt=self.cur_time-self.last_time
         self.last_time=self.cur_time
         self.finger_data_good_counter+=1
         if self.finger_data_good_counter>self.finger_data_good_max_counter:
             self.finger_data_good=False
-        if result:
-            self.new_finger_pose[:3,3]=array(result)
-            if self.finger_data_good:
-                self.finger_vel_twist[:3]=my_diff(self.finger_pose,
-                                                  self.new_finger_pose, dt)[:3]
-                self.finger_pose=self.new_finger_pose
-            else:
-                self.finger_pose[:3,3]=array(result)
-            self.finger_data_good_counter=0
-            self.finger_data_good=True
+
+        #get finger pos
+        force_pos_data=self.hforce.get_data_finger(self.finger)
+        self.new_finger_pose[:3,3]=force_pos_data[:3]
+        self.finger_vel_twist[:3]=my_diff(self.finger_pose,
+                                              self.new_finger_pose, dt)[:3]
+        self.finger_pose=self.new_finger_pose
         print "finger vel", self.finger_vel_twist
 
         # finger local calculation
@@ -390,12 +398,12 @@ class Loop(Controlloop):
 
         #first we find if finger is touching box
         touch,self.finger_object_face=find_finger_object_face(self.finger_vel_local,self.finger_pos_local,
-                                      self.box_vertices, self.box_planes)
+                                      self.obj_par.box_vertices, self.obj_par.box_planes)
 
         #for finger vel z
         print "vel local", self.finger_vel_local
         if self.finger_vel_local[2]!=0.:
-            friction_coef_finger_object_xy=self.friction_coef_finger_object*\
+            friction_coef_finger_object_xy=self.obj_par.friction_coef_finger_object*\
                                         abs(self.finger_vel_local[1])/\
                                         norm(array([self.finger_vel_local[1],
                                                     self.finger_vel_local[2]]))
@@ -403,20 +411,20 @@ class Loop(Controlloop):
             # norm(array([self.finger_vel_local[1],
             # self.finger_vel_local[2]]))
         else:
-            friction_coef_finger_object_xy=self.friction_coef_finger_object
-        friction_coef_finger_object_xy=self.friction_coef_finger_object # TODO 
+            friction_coef_finger_object_xy=self.obj_par.friction_coef_finger_object
+        friction_coef_finger_object_xy=self.obj_par.friction_coef_finger_object # TODO 
 
-        fmax2=self.friction_coef_object_table*\
-                   (self.weight_force-self.friction_finger_z_force)
-        mmax2=self.mmax_base*(self.weight_force-self.friction_finger_z_force)
+        fmax2=self.obj_par.friction_coef_object_table*\
+                   (self.obj_par.weight_force-self.obj_par.friction_finger_z_force)
+        mmax2=self.obj_par.mmax_base*(self.obj_par.weight_force-self.obj_par.friction_finger_z_force)
         print "fmax2, mmax2", fmax2,mmax2, friction_coef_finger_object_xy
         #LC_c_matrix=nc_to_forces_map(fmax2,mmax2,self.finger_pos_local)
         #nc_max,nc_min,fc_max,fc_min=nc_max_min(
-        #    array(self.box_planes[self.table_object_face][0]),
-        #    array(self.box_planes[
+        #    array(self.obj_par.box_planes[self.table_object_face][0]),
+        #    array(self.obj_par.box_planes[
         #    self.finger_object_face][0]),
-        #   friction_coef_finger_object_xy,
-        #   inv(LC_c_matrix))
+        #    friction_coef_finger_object_xy,
+        #    inv(LC_c_matrix))
 
         #end finger vel z
 
@@ -424,9 +432,9 @@ class Loop(Controlloop):
             #velocity of box in point of contact (when finger slides or not)
             vc_local,result=vc_from_vfinger(self.finger_vel_local,
                                             self.finger_pos_local,
-                                       self.box_vertices,self.box_planes,
-                                array(self.box_planes[self.finger_object_face][0]),
-                                array(self.box_planes[self.table_object_face][0]),
+                                       self.obj_par.box_vertices,self.obj_par.box_planes,
+                                array(self.obj_par.box_planes[self.finger_object_face][0]),
+                                array(self.obj_par.box_planes[self.table_object_face][0]),
                                 friction_coef_finger_object_xy,fmax2,
                                        mmax2)
             # print "Vc local", vc_local
@@ -435,23 +443,23 @@ class Loop(Controlloop):
             #table-object friction model
             Vo_local,fc_local,fo_local=vc_to_vo_linear_model(
                 vc_local, self.finger_pos_local, fmax2, mmax2)
-            cor_local=array([-Vo_local[1],Vo_local[0],0.])/Vo_local[2]
+            self.cor_local=array([-Vo_local[1],Vo_local[0],0.])/Vo_local[2]
             Vo_local=array([Vo_local[0],Vo_local[1],0.,0.,0.,Vo_local[2]])
-            # self.friction_finger_z_force=fc_local[1]*self.finger_vel_local[2]/\
+            # self.obj_par.friction_finger_z_force=fc_local[1]*self.finger_vel_local[2]/\
             # self.finger_vel_local[1]
             if self.finger_vel_local[2]!=0.:
-                self.friction_finger_z_force=self.friction_coef_finger_object*fc_local[0]*self.finger_vel_local[2]/norm(array([self.finger_vel_local[1],self.finger_vel_local[2]]))
+                self.obj_par.friction_finger_z_force=self.obj_par.friction_coef_finger_object*fc_local[0]*self.finger_vel_local[2]/norm(array([self.finger_vel_local[1],self.finger_vel_local[2]]))
             else:
-                self.friction_finger_z_force=0.
+                self.obj_par.friction_finger_z_force=0.
             print "fc local, vc local", fc_local, vc_local/norm(vc_local)
-            print "force z", self.friction_finger_z_force
+            print "force z", self.obj_par.friction_finger_z_force
         else:
             vc_local=array([0.]*3)
             #finger not touching, no movement
             Vo_local=array([0.]*6)
             fo_local=array([0.]*3)
             fc_local=array([0.]*3)
-            cor_local=array([0.]*3)
+            #cor_local=array([0.]*3) #commented so that it displays last position
         # box twist
         self.box_vel_twist[:3]=dot(self.box_pose[:3,:3],
                                    Vo_local[:3])
@@ -459,9 +467,6 @@ class Loop(Controlloop):
         #fc_local to fc
         self.fc=dot(self.box_pose[:3,:3],fc_local)
 
-        #send through yarp
-        write_narray_port(self.fc_out_port,self.fc)
-        write_narray_port(self.xo_out_port,self.box_pose_out.reshape(16))
 
         #box visualization
         box_top_pose=array(self.box_pose)
@@ -469,7 +474,7 @@ class Loop(Controlloop):
         vis_points+=[(self.box_pose_out,identity(4),self.box_id), 
                     #(self.contact_pos_local,box_top_pose,self.contact_id),
                     (self.finger_pose,identity(4),self.contact_id),
-                    (cor_local,box_top_pose,self.cor_id)]
+                    (self.cor_local,box_top_pose,self.cor_id)]
         foxy_local=array(fo_local)
         foxy_local[2]=0.
         voxy_local=array(Vo_local)[:3]
@@ -504,10 +509,10 @@ class Loop(Controlloop):
 
         #gaussian noise to output information.
         self.box_pose_out=array(self.box_pose)
-        noise_level=0.1*0.3*array([0.02,0.02,5.0*pi/180.0])
+        noise_level=0.01*array([0.02,0.02,5.0*pi/180.0])
         self.box_pose_out[:2,3]=normal(loc=self.box_pose_out[:2,3], scale=noise_level[:2], size=(2))
         random_z_angle=normal(loc=0.,scale=noise_level[2])
-        table_object_normal=-array(self.box_planes[self.table_object_face][0])
+        table_object_normal=-array(self.obj_par.box_planes[self.table_object_face][0])
         print "table normal", table_object_normal
         random_rot_frame=identity(4)
         random_rot_frame[:2,3]=0*array([0.0,0.01]) #camera offset error
@@ -519,24 +524,30 @@ class Loop(Controlloop):
         #self.finger_pose=my_adddelta(self.finger_pose,self.finger_vel_twist,
                                       #self.period)
 
+        #send through yarp
+        #write_narray_port(self.fc_out_port,self.fc)
+        write_bottle_lists(self.fc_out_port,[concatenate((array([self.finger]),-self.fc))])
+        write_narray_port(self.xo_out_port,self.box_pose_out.reshape(16))
+
+
 def main():
-    view_objects=Roboviewer_objects("/planar_slider","/lwr/roboviewer", 2000)
+    view_objects=Roboviewer_objects("/planar_slider","/lwr/roboviewer", counter=10000)
     box_id=view_objects.create_object("box")
     view_objects.send_prop(box_id,"scale",[1.,1.,0.1])
-    view_objects.send_prop(box_id,"timeout",[-1])
+    view_objects.send_prop(box_id,"timeout",[10])
     view_objects.send_prop(box_id,"color",[0.5,0.5,0.5])
 
     contact_id=view_objects.create_object("sphere")
-    view_objects.send_prop(contact_id,"scale",[0.05,0.05,0.05])
+    view_objects.send_prop(contact_id,"scale",[0.01,0.01,0.01])
     view_objects.send_prop(contact_id,"timeout",[-1])
 
     cor_id=view_objects.create_object("sphere")
-    view_objects.send_prop(cor_id,"scale",[0.05,0.05,0.05])
+    view_objects.send_prop(cor_id,"scale",[0.02,0.02,0.02])
     view_objects.send_prop(cor_id,"timeout",[-1])
     view_objects.send_prop(cor_id,"color",[1,0,0])
 
     vc_id=view_objects.create_object("arrow")
-    view_objects.send_prop(vc_id,"scale",[0.5,0.5,0.125])
+    view_objects.send_prop(vc_id,"scale",[0.05,0.05,0.0125])
     vc_id_offset=identity(4)
     vc_id_offset[:3,3]=array([0.,0.,-1.])
     view_objects.send_prop(vc_id,"pose_offset",vc_id_offset.reshape(16).tolist())
@@ -544,7 +555,7 @@ def main():
     view_objects.send_prop(vc_id,"color",[1,0,0])
 
     fc_id=view_objects.create_object("arrow")
-    view_objects.send_prop(fc_id,"scale",[0.5,0.5,0.125])
+    view_objects.send_prop(fc_id,"scale",[0.05,0.05,0.0125])
     fc_id_offset=identity(4)
     fc_id_offset[:3,3]=array([0.,0.,-1.])
     view_objects.send_prop(fc_id,"pose_offset",fc_id_offset.reshape(16).tolist())
@@ -552,7 +563,7 @@ def main():
     view_objects.send_prop(fc_id,"color",[0,1,0])
 
     vo_id=view_objects.create_object("arrow")
-    view_objects.send_prop(vo_id,"scale",[0.5,0.5,0.125])
+    view_objects.send_prop(vo_id,"scale",[0.05,0.05,0.0125])
     vo_id_offset=identity(4)
     vo_id_offset[:3,3]=array([0.,0.,-1.])
     view_objects.send_prop(vo_id,"pose_offset",vo_id_offset.reshape(16).tolist())
@@ -560,7 +571,7 @@ def main():
     view_objects.send_prop(vo_id,"color",[1,0,0])
 
     fo_id=view_objects.create_object("arrow")
-    view_objects.send_prop(fo_id,"scale",[0.5,0.5,0.125])
+    view_objects.send_prop(fo_id,"scale",[0.05,0.05,0.0125])
     fo_id_offset=identity(4)
     fo_id_offset[:3,3]=array([0.,0.,-1.])
     view_objects.send_prop(fo_id,"pose_offset",fo_id_offset.reshape(16).tolist())

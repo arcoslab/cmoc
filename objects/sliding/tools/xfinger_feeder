@@ -37,7 +37,7 @@ class Control(Controlloop):
         self.raw_key=Raw_key()
         base_name="/xfinger_feeder"
         self.xfinger_out_port=new_port(base_name+"/xfinger:out",
-                                  "out", "/slider_sim/xfinger:in")
+                                  "out", "/slider_sim/xfinger:in", timeout=2)
         self.pose=identity(4)
         self.pose[:3,3]=array([1.,0.1,0.1])
         self.vel=array([0.,0.,0.,0.,0.,0.])

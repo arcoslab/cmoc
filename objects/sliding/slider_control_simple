@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+# This program slides a box on top of a plane towards a goal. It should be used together with roboviewer and planer_sliding_simple
+
+
 import sys, time, LS
 sys.path.append("../../control/motionControl")
 #sys.path.append("../../tools/python/rawkey")
