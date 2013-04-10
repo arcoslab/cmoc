@@ -196,9 +196,10 @@ def approach_until_touch(hand_handle, finger, arm_handle, force_handle, touch_po
         move_robot(hand_handle, finger, arm_handle, pose, goal_precision, wait=0.1, extra_tool=extra_tool)
         print "Pos", cur_pose, "Force", force
     #stop robot
-    #cur_pose=quat.to_matrix_fixed(data[3:7], r=data[:3])
-    #cur_pose[:3,:3]=pose[:3,:3]
-    #move_robot(hand_handle, finger, arm_handle, cur_pose, goal_precision, extra_tool=extra_tool)
+    dprint("STop movement")
+    cur_pose=quat.to_matrix_fixed(data[3:7], r=data[:3])
+    cur_pose[:3,:3]=pose[:3,:3]
+    move_robot(hand_handle, finger, arm_handle, cur_pose, goal_precision, extra_tool=extra_tool)
 
 def vo_to_vc(vo_local,contact_pos_local,fmax,mmax):
     A=ps.forces_to_no_map(fmax,mmax)
@@ -659,7 +660,7 @@ class Control(Controlloop):
         eprint("Approach until touch")
         #Approach object in straight line until it touches the object (feels some force) then stop. In this point we are ready for control.
         force_threshold=0.01 #smaller than static friction force
-        finger_approach_speed=0.003
+        finger_approach_speed=0.03
         approach_until_touch(self.hand_right_server, self.finger, self.harm, self.hforce, new_touch_point, force_threshold, self.goal_precision, finger_approach_speed, finger_start_pose, self.simulation, extra_tool=self.rel_pose_marker_finger)
         eprint("Done")
         raw_input()
@@ -1077,7 +1078,7 @@ class Control(Controlloop):
         #Intuitive
         #forward velocity control rule
         if self.simulation:
-            finger_speed=0.02
+            finger_speed=0.012
             vc_angle_factor_slope=5.
         else:
             finger_speed=0.015
@@ -1340,7 +1341,7 @@ class Control(Controlloop):
             dprint("Commanded finger pose", self.finger_pose2[:3,3])
             #write_narray_port(self.finger_pose_out_port,self.finger_pose_global[:3,3])
             self.finger_pose2[:3,:3]=self.finger_start_orient
-            move_robot(self.hand_right_server, self.finger, self.harm, self.finger_pose2, self.goal_precision, extra_tool=self.rel_pose_marker_finger, update_finger_cart=self.update_finger_cart)
+            move_robot(self.hand_right_server, self.finger, self.harm, self.finger_pose2, self.goal_precision, wait=0.01, extra_tool=self.rel_pose_marker_finger, update_finger_cart=self.update_finger_cart)
             eprint("After")
             #move_robot(self.hand_right_server, self.finger, self.harm, self.finger_pose2, self.goal_precision)
             if self.update_finger_cart:
@@ -1422,7 +1423,7 @@ def main():
     #fcd=import_config(options.finger_cal_data_filename)
     config_hands=import_config(options.config_hands)
 
-    control_loop=Control(25.)
+    control_loop=Control(15.)
     control_loop.loop(simulation=options.sim, config_hands=config_hands)
 
 if __name__=="__main__":
