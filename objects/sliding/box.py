@@ -1,8 +1,25 @@
+#!/usr/bin/env python
+# Copyright (c) 2013 Federico Ruiz Ugalde
+# Author: Federico Ruiz Ugalde <memeruiz at gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
 from numpy import array
 from arcospyu.robot_tools.robot_trans import homo_matrix
 from arcospyu.computer_graphics.pluecker_test import polygon_pluecker_test
 from arcospyu.computer_graphics.ray_tracing import plane_ray_intersec2
-from numpy.linalg import norm, inv
+from numpy.linalg import norm, inv, pinv
 from arcospyu.kdl_helpers.kdl_helpers import rot_vector_angle
 from numpy import dot, arctan, cross, sqrt, concatenate
 
@@ -56,6 +73,19 @@ def forces_to_nc_map(fmax,mmax,contact_local):
     B=2*array([[mmax**2/fmax**2+contact_local[1]**2,-contact_local[0]*contact_local[1]],
                [-contact_local[0]*contact_local[1],mmax**2/fmax**2+contact_local[0]**2]])
     return(B)
+
+
+def vo_to_vc(vo_local,contact_pos_local,fmax,mmax):
+    A=forces_to_no_map(fmax,mmax)
+    B_inv=nc_to_forces_map(fmax,mmax,contact_pos_local)
+    C=force_c_to_force_o_map(contact_pos_local)
+
+    #system calculation
+    P=dot(A,dot(C,B_inv))
+    P_inv=pinv(P)
+    vc_local=dot(P_inv,vo_local)/mmax**2
+    return(vc_local)
+
 
 def vo_to_vc_map(contact_local):
     D=array([[1,0,-contact_local[1]],

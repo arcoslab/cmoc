@@ -16,9 +16,6 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import sys
-sys.path.append("../../control/motionControl")
-sys.path.append("../../tools/python/numeric/")
-
 from arcospyu.yarp_tools.yarp_comm_helpers import new_port, readListPort
 from numpy import array, identity, dot, pi
 from numpy.linalg import norm
@@ -31,6 +28,7 @@ from arcospyu.control.control_loop import Controlloop
 #from helpers import Roboviewer_objects, Joint_sim, Finger_sim, Hand_sim, Controlloop, 
 import time
 from numpy import max as npmax
+from arcospyu.signal_proc.filters import  Filter_vector
 
 
 
@@ -99,36 +97,6 @@ class Object_pos_handle(object):
             pass #TODO, get object from marker tracking in case of using cop
         return(xo)
 
-class Filter_vector():
-    def __init__(self, dim=3, order=2, freq=0.7, y=[], x=[]):
-        self.dim=dim
-        self.filters=[]
-        for i in xrange(dim):
-            if len(y)>0:
-                self.filters.append(Filter(order=order, freq=freq, y=y[i], x=x[i]))
-            else:
-                self.filters.append(Filter(order=order, freq=freq))
-
-    def filter(self, data):
-        return(array([self.filters[i].filter(array([data[i]]))[0] for i in xrange(self.dim)]))
-
-
-class Filter():
-    def __init__(self, order=2, freq=0.7,y=[],x=[]):
-         self.b,self.a=iirfilter(order, freq, btype="lowpass")
-         if len(y)>0:
-             print "here"
-             self.z=lfiltic(self.b,self.a, y, x=x)
-         else:
-             self.z=array([0.]*order)
-         #self.z=lfiltic(self.b,self.a, y,x=x)
-
-    def filter(self,raw_data):
-        #print "Raw", array(raw_data)
-        y,self.z=lfilter(self.b,self.a,raw_data,zi=self.z, axis=0)
-        return(y)
-
-
 def finger_joint_move(hand_handle, finger, joint_pos, wait=0., goal_precision=0.): #joint_pos in degrees
     hand_handle.set_ref(finger,array(joint_pos)*pi/180.0)
     hand_handle.update_controller_refs(list_fingers=[finger])
@@ -147,6 +115,15 @@ def finger_joint_move(hand_handle, finger, joint_pos, wait=0., goal_precision=0.
                 return
         print "Timeout, goal never reached with requested precision"
 
+
+def read_finger(yarp_port, blocking, finger):
+    result=yarp_port.read(blocking)
+    bottle=result.get(finger).asList()
+    #print "Result", bottle
+    trans=array(map(yarp.Value.asDouble,map(bottle.get, range(3))))
+    rot=array(map(yarp.Value.asDouble,map(bottle.get, range(3,7))))
+    force=array(map(yarp.Value.asDouble,map(bottle.get, range(7,10))))
+    return(trans,rot,force)
 
 
 def move_robot_fast(hand_handle, finger, arm_handle, pose, goal_precision, extra_tool=identity(4), update_finger_cart=True):

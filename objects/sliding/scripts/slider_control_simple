@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # Copyright (c) 2011 Technische Universitaet Muenchen, Informatik Lehrstuhl IX.
 # Author: Federico Ruiz-Ugalde
 #
@@ -18,109 +18,20 @@
 # This program slides a box on top of a plane towards a goal. It should be used together with roboviewer and planer_sliding_simple
 
 
-import sys, time, LS
-sys.path.append("../../control/motionControl")
-#sys.path.append("../../tools/python/rawkey")
-from numpy import array, identity, dot, concatenate, sign, cross, arccos, pi, arctan, tan, cos, sin, sign, exp, arctan2
+import sys, time
+from cmoc.objects.sliding import LS
+from numpy import array, identity, dot, concatenate, sign, pi, arctan, tan, cos, sin, sign, exp, arctan2
 from numpy.linalg import pinv, inv, norm
 from arcospyu.yarp_tools.yarp_comm_helpers import new_port, readListPort, write_narray_port
 from pyrovito.pyrovito_utils import Roboviewer_objects
 from arcospyu.kdl_helpers import rot_vector_angle, my_adddelta, my_diff, my_get_euler_zyx
 from arcospyu.control.control_loop import Controlloop
-
+from arcospyu.robot_tools.robot_trans import homo_matrix, rot_z
+from arcospyu.numeric.lin_alg import angle_from_a_to_b, vector_saturation2
 #from helpers import Roboviewer_objects, Joint_sim, Finger_sim, Hand_sim, Controlloop, kdlframe_to_narray, narray_to_kdlframe, narray_to_kdltwist, kdltwist_to_narray, rot_vector_angle, my_adddelta, my_get_euler_zyx
 #from rawkey import Raw_key, Keys
-import box as ps
-from scipy.signal import iirfilter, lfilter, lfiltic
-
-class Filter():
-    def __init__(self, order=2, freq=0.7,y=[],x=[]):
-         self.b,self.a=iirfilter(order, freq, btype="lowpass")
-         if len(y)>0:
-             print "here"
-             self.z=lfiltic(self.b,self.a, y)
-         else:
-             self.z=array([0.]*order)
-         self.z=lfiltic(self.b,self.a, y,x=x)
-    
-    def filter(self,raw_data):
-        print "Raw", array(raw_data)
-        y,self.z=lfilter(self.b,self.a,raw_data,zi=self.z, axis=0)
-        return(y)
-         
-
-def homo_matrix(rot_m=identity(3),trans=array([0.]*3)):
-    m=identity(4)
-    m[:3,:3]=rot_m
-    m[:3,3]=trans
-    return(m)
-
-def rot_z(angle):
-    return(array([[cos(angle), -sin(angle), 0.],
-                  [sin(angle), cos(angle),0.],
-                  [0.,0.,1.]]))
-
-def angle_from_a_to_b(a,b):
-    s=sign(cross(a,b))
-    #print "s", s
-    if s==0.:
-        s=1.
-    return(arccos(min(dot(a,b),1.))*s)
-
-def vo_to_vc(vo_local,contact_pos_local,fmax,mmax):
-    A=ps.forces_to_no_map(fmax,mmax)
-    B_inv=ps.nc_to_forces_map(fmax,mmax,contact_pos_local)
-    C=ps.force_c_to_force_o_map(contact_pos_local)
-
-    #system calculation
-    P=dot(A,dot(C,B_inv))
-    P_inv=pinv(P)
-    vc_local=dot(P_inv,vo_local)/mmax**2
-    return(vc_local)
-
-def vector_saturation(vector_min, vector_max, vector):
-    angle_min_max=arccos(dot(vector_min,vector_max)/(norm(vector_min)*norm(vector_max)))
-    angle_max=arccos(dot(vector,vector_max)/(norm(vector)*norm(vector_max)))
-    angle_min=arccos(dot(vector,vector_min)/(norm(vector)*norm(vector_min)))
-    print "angles", angle_min_max, angle_max, angle_min
-    if (angle_max > angle_min_max) or (angle_min > angle_min_max):
-        print "limiting"
-        if angle_max < angle_min:
-            return(vector_max)
-        else:
-            return(vector_min)
-    return(vector)
-
-def vector_saturation2(vector1, vector2, vector_test):
-    #saturates the direction
-    vector1n=vector1/norm(vector1)
-    vector2n=vector2/norm(vector2)
-    if norm(vector_test) > 0.00000001:
-        vector_testn=vector_test/norm(vector_test)
-    else:
-        vector_testn=array([1.0,0.,0.])
-    #print "vector1n", vector1n, "vector2n", vector2n, "vector test", vector_testn
-    proj_vector1n=dot(vector_testn,vector1n)
-    proj_vector2n=dot(vector_testn,vector2n)
-    #if proj_vector1n<0. or proj_vector2n<0.:
-    #    print "input vector not in the expected direction", proj_vector1n, proj_vector2n
-        #return(array([0.,0.,0.]))
-    if proj_vector1n<=proj_vector2n:
-        # test is done using vector1n
-        proj_vector2n_in_1n=dot(vector1n,vector2n)
-        if proj_vector1n<proj_vector2n_in_1n:
-            print "Vector outside vector2n", vector2n
-            return(vector2n)
-        else:
-            return(vector_testn)
-    else:
-        #test using vector2n
-        proj_vector1n_in_2n=dot(vector2n,vector1n)
-        if proj_vector2n<proj_vector1n_in_2n:
-            print "Vector outside vector1n", vector1n
-            return(vector1n)
-        else:
-            return(vector_testn)
+from cmoc.objects.sliding.box import vo_to_vc
+from arcospyu.signal_proc.filters import Filter
 
 class Control(Controlloop):
 
