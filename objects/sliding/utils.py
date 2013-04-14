@@ -19,8 +19,8 @@ import sys
 sys.path.append("../../control/motionControl")
 sys.path.append("../../tools/python/numeric/")
 
-from arcospyu.yarp_tools.yarp_comm_helpers import new_port, readListPort, write_narray_port, yarpListToList, bottle_to_list
-from numpy import array, identity, dot, concatenate, sign, cross, arccos, pi, arctan, tan, cos, sin, sign, exp, arctan2, mean
+from arcospyu.yarp_tools.yarp_comm_helpers import new_port, readListPort
+from numpy import array, identity, dot, pi
 from numpy.linalg import norm
 import yarp
 from scipy.signal import iirfilter, lfilter, lfiltic
@@ -30,7 +30,6 @@ from arcospyu.kdl_helpers import rot_vector_angle, my_adddelta, my_diff, kdlfram
 from arcospyu.control.control_loop import Controlloop
 #from helpers import Roboviewer_objects, Joint_sim, Finger_sim, Hand_sim, Controlloop, 
 import time
-from numpy.random import normal
 from numpy import max as npmax
 
 
@@ -50,39 +49,6 @@ def wait_valid_object_pose(object_pos_handle, last_object_pose, max_object_jump_
             print
     return(xo_new)
 
-
-class Force_handle(object):
-    def __init__(self, baseportname, remote_name):
-        self.port=new_port(baseportname+"/force:i", "in", remote_name, timeout=10.0)
-        self.update_data(blocking=True)
-
-    def update_data(self, blocking=True):
-        pending=self.port.getPendingReads()
-        for i in xrange(pending):
-            self.port.read()
-        bottle=self.port.read(blocking)
-        self.data=bottle_to_list(bottle)
-
-    def get_pose(self, finger, update=True, blocking=True, extra_tool=identity(4)):
-        if update:
-            self.update_data(blocking)
-        finger_data=array(self.data[finger])
-        return(dot(quat.to_matrix_fixed(finger_data[3:7], r=finger_data[:3]), extra_tool))
-
-    def get_data(self, blocking=True, update=True):
-        if update:
-            self.update_data(blocking=blocking)
-        return(self.data)
-
-    def get_data_finger(self, finger, blocking=True, update=True):
-        if update:
-            self.update_data()
-        return(array(self.data[finger]))
-
-    def get_force(self, finger, blocking=True, update=True):
-        if update:
-            self.update_data(blocking=blocking)
-        return(self.data[finger][-3:])
 
 class Object_pos_handle(object):
     def __init__(self, basename, simulation=True):
@@ -182,13 +148,6 @@ def finger_joint_move(hand_handle, finger, joint_pos, wait=0., goal_precision=0.
         print "Timeout, goal never reached with requested precision"
 
 
-def add_noise_to_pose(pose, dist_noise=0.02, angle_noise=5.0*pi/180.0):
-    noise_pose=identity(4)
-    noise_pose[:3,3]=normal(loc=pose[:3,3], scale=dist_noise, size=(3))
-    random_angles=normal(loc=0.,scale=angle_noise, size=(3))
-    noise_pose[:3,:3]=dot(pose[:3,:3],rpy_to_rot_matrix(random_angles))
-    return(noise_pose)
-
 
 def move_robot_fast(hand_handle, finger, arm_handle, pose, goal_precision, extra_tool=identity(4), update_finger_cart=True):
     #hand_handle.update_sensor_data()
@@ -212,40 +171,8 @@ def move_robot(hand_handle, finger, arm_handle, pose, goal_precision, wait=10.0,
     arm_handle.gotoFrame(pose.reshape(16), wait=wait, goal_precision=goal_precision)
     print "END GOTO POSE"
 
-def homo_matrix(rot_m=identity(3),trans=array([0.]*3)):
-    m=identity(4)
-    m[:3,:3]=rot_m
-    m[:3,3]=trans
-    return(m)
-
-
-def rot_z(angle):
-    return(array([[cos(angle), -sin(angle), 0.],
-                  [sin(angle), cos(angle),0.],
-                  [0.,0.,1.]]))
-
-def rot_x(angle):
-    return(array([[1., 0., 0.],
-                  [0., cos(angle), -sin(angle)],
-                  [0., sin(angle), cos(angle)]]))
-
-def rot_y(angle):
-    return(array([[cos(angle), 0, sin(angle)],
-                  [0., 1., 0.],
-                  [-sin(angle), 0., cos(angle)]]))
-
-
-def random_homo_matrix(center_pos=array([0.]*3), noise_level=array([0.02,0.02,0.02,5.0*pi/180.0,5.0*pi/180.0,5.0*pi/180.0])):
-    #incomplete function, not finished
-    out_matrix=identity(4)
-    out_matrix[:3,3]=normal(loc=array(center_pos), scale=noise_level[:3], size=(3))
-    random_angles=normal(loc=array(center_angles),scale=noise_level[2])
-    table_object_normal=-array(self.box_planes[self.table_object_face][0])
-    print "table normal", table_object_normal
-    random_rot_frame=identity(4)
-    random_rot_frame[:2,3]=0*array([0.0,0.01]) #camera offset error
-    random_rot_frame[:3,:3]=rot_vector_angle(table_object_normal, random_z_angle)
-    self.box_pose_out=dot(self.box_pose_out, random_rot_frame)
+def near(num1,num2,epsilon=1e-10):
+    return(abs(num1-num2)<epsilon)
 
 
 def find_force_noise_levels(force_handle, finger, filter_order=3, filter_freq=0.3, measurements=10):

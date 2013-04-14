@@ -15,18 +15,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from robot_params import force_factor
+from cmoc.objects.sliding.robot_params import force_factor
 from arcospyu.dprint import dprint, eprint, iprint
 from arcospyu.dprint import d as dp
-import sys, time, LS
-sys.path.append("../../control/motionControl")
-sys.path.append("../../tools/python/numeric/")
-sys.path.append("../../robots/kimp/hand/hand_cartesian/")
-sys.path.append("../../tools/python/computer_graphics")
-sys.path.append("../../perception/webcam_baseframe_calibration/")
-sys.path.append("../../../robot_descriptions/tum-rosie/kinematics/sahand/calibration_data/")
+import sys, time
 
-#sys.path.append("../../tools/python/rawkey")
 from arcospyu.computer_graphics.pluecker_test import polygon_pluecker_test, triangle_ray_intersection, plane_ray_intersection
 from numpy import array, identity, dot, concatenate, sign, cross, arccos, pi, arctan, tan, cos, sin, sign, exp, arctan2, mean
 from numpy.linalg import pinv, inv, norm
@@ -39,17 +32,19 @@ from arcospyu.kdl_helpers import rot_vector_angle, my_adddelta, my_diff, my_get_
 #from helpers import Roboviewer_objects, Joint_sim, Finger_sim, Hand_sim, Controlloop, kdlframe_to_narray, narray_to_kdlframe, narray_to_kdltwist, kdltwist_to_narray, rot_vector_angle, my_adddelta, my_get_euler_zyx
 #from rawkey import Raw_key, Keys
 from arcospyu.numeric import quat
-import planar_sliding as ps
 from scipy.signal import iirfilter, lfilter, lfiltic
 from cmoc.robot.hand_sim_handler import Hand
-from utils import Object_pos_handle, Force_handle, Filter_vector, Filter, wait_valid_object_pose, move_robot, rot_z, homo_matrix, finger_joint_move, find_force_noise_levels
+from cmoc.objects.sliding.utils import Object_pos_handle, Filter_vector, Filter, wait_valid_object_pose, move_robot, finger_joint_move, find_force_noise_levels
+from cmoc.robot.sim_handlers import Force_handle
+from arcospyu.robot_tools.robot_trans import rot_z, homo_matrix
 import optparse
-from object_params import Object_params
-from webcam_calibration_values import rel_pose_marker_finger
-from finger_calibration_data import *
+#from webcam_calibration_values import rel_pose_marker_finger
+#from finger_calibration_data import *
 import pickle
 
-
+from arcospyu.computer_graphics.ray_tracing import plane_ray_intersec2
+#from cmoc.objects.sliding.box import vc_from_vfinger, , forces_to_no_map, force_c_to_force_o_map, vc_to_vo_linear_model, fc_to_nc_matrix
+from cmoc.objects.sliding.box import forces_to_no_map, force_c_to_force_o_map, vc_to_vo_linear_model, fc_to_nc_matrix, nc_to_forces_map
 
 
 def find_crossing_faces(vector,vector_pos, vertices_faces, planes):
@@ -101,7 +96,7 @@ def find_crossing_faces(vector,vector_pos, vertices_faces, planes):
             #intersection=plane_ray_intersection(array(planes[face][0]),
             #                                    array(planes[face][1]),
             #                                    vector_pos,vector)
-            intersection=ps.plane_ray_intersec2( array(planes[face][0]),
+            intersection=plane_ray_intersec2( array(planes[face][0]),
                                               array(planes[face][1]),
                                               vector,vector_pos)
             intersection[0]*=norm(vector)
@@ -202,9 +197,9 @@ def approach_until_touch(hand_handle, finger, arm_handle, force_handle, touch_po
     move_robot(hand_handle, finger, arm_handle, cur_pose, goal_precision, extra_tool=extra_tool)
 
 def vo_to_vc(vo_local,contact_pos_local,fmax,mmax):
-    A=ps.forces_to_no_map(fmax,mmax)
-    B_inv=ps.nc_to_forces_map(fmax,mmax,contact_pos_local)
-    C=ps.force_c_to_force_o_map(contact_pos_local)
+    A=forces_to_no_map(fmax,mmax)
+    B_inv=nc_to_forces_map(fmax,mmax,contact_pos_local)
+    C=force_c_to_force_o_map(contact_pos_local)
 
     #system calculation
     P=dot(A,dot(C,B_inv))
@@ -383,7 +378,7 @@ class Control(Controlloop):
         # self.view_objects.send_prop(self.ncmax_id,"timeout",[-1])
 
         #model parameters
-        self.obj_par=Object_params()
+        self.obj_par=self.object_params.Object_params()
 
         self.finger_object_face=1
         self.table_object_face=5
@@ -1416,15 +1411,17 @@ class Control(Controlloop):
 def main():
     parser=optparse.OptionParser("usage: %prog [options]")
     parser.add_option("-s", "--simulation", action="store_true", dest="sim", default=False,help="Simulation")
-    parser.add_option("-c", "--finger_cal_data", dest="finger_cal_data_filename", default="robot_description/tum-rosie/kinematics/sahand/calibration_data/finger_calibration_data.py", type="string", help="Finger calibration data filename")
+    parser.add_option("-c", "--finger_cal_data", dest="finger_cal _data_filename", default="robot_description/tum-rosie/kinematics/sahand/calibration_data/finger_calibration_data.py", type="string", help="Finger calibration data filename")
     parser.add_option("-f", "--config_hands", dest="config_hands", default="robot_description/tum-rosie/kinematics/sahand/hands_kin.py", type="string", help="hands config filename")
+    parser.add_option("-o", "--object_params_file", dest="object_params_filename", default="cmoc/objects/sliding/objects/object_params.py", type="string", help="Object parameters file")
     (options, args)= parser.parse_args(sys.argv[1:])
     from arcospyu.config_parser.config_parser import import_config
     #fcd=import_config(options.finger_cal_data_filename)
     config_hands=import_config(options.config_hands)
+    object_params=import_config(options.object_params_filename)
 
     control_loop=Control(15.)
-    control_loop.loop(simulation=options.sim, config_hands=config_hands)
+    control_loop.loop(simulation=options.sim, config_hands=config_hands, object_params=object_params)
 
 if __name__=="__main__":
     main()

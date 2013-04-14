@@ -24,7 +24,7 @@ import time
 #sys.path.append("../../temp/hand_cart/")
 #sys.path.append("../../temp/calibration_data")
 from cmoc.robot.hand_sim_handler import Hand
-from arcospyu.lafik.lafik import Lafik
+from arcospyu.robot_tools.lafik import Lafik
 from cmoc.robot.sim_handlers import Joint_sim, Finger_sim, Hand_sim
 sys.path.append("../../temp/pyrovito/")
 from pyrovito.pyrovito_utils import Roboviewer_objects

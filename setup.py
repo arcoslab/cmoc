@@ -11,6 +11,6 @@ setup(name='cmoc',
       url='http://www.arcoslab.org/',
       package_dir={'cmoc': ''},
       packages=['cmoc', 'cmoc.robot', 'cmoc.objects', 'cmoc.objects.sliding'],
-      scripts=['robot/joint_sim', 'robot/torque_sim', 'robot/sahand_yarp_sim', 'objects/sliding/planar_sliding_simple', 'objects/sliding/tools/xfinger_feeder']
+      scripts=['robot/joint_sim', 'robot/torque_sim', 'robot/sahand_yarp_sim', 'objects/sliding/planar_sliding_simple', 'objects/sliding/tools/xfinger_feeder', 'objects/sliding/planar_sliding', 'objects/sliding/slider_control', 'objects/sliding/slider_control_simple']
      )
 

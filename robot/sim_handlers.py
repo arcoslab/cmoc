@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 import yarp
+from numpy import identity, array
+from arcospyu.yarp_tools.yarp_comm_helpers import new_port, bottle_to_list
 
 class Joint_sim():
     def __init__(self,portbasename,jointsimportbasename):
@@ -59,6 +61,40 @@ class Hand_sim():
         for i in xrange(4):
             #print "Torques", torques[i,:]
             self.fingers_sim_client[i].set_torques(torques[i,:])
+
+class Force_handle(object):
+    def __init__(self, baseportname, remote_name):
+        self.port=new_port(baseportname+"/force:i", "in", remote_name, timeout=10.0)
+        self.update_data(blocking=True)
+
+    def update_data(self, blocking=True):
+        pending=self.port.getPendingReads()
+        for i in xrange(pending):
+            self.port.read()
+        bottle=self.port.read(blocking)
+        self.data=bottle_to_list(bottle)
+
+    def get_pose(self, finger, update=True, blocking=True, extra_tool=identity(4)):
+        if update:
+            self.update_data(blocking)
+        finger_data=array(self.data[finger])
+        return(dot(quat.to_matrix_fixed(finger_data[3:7], r=finger_data[:3]), extra_tool))
+
+    def get_data(self, blocking=True, update=True):
+        if update:
+            self.update_data(blocking=blocking)
+        return(self.data)
+
+    def get_data_finger(self, finger, blocking=True, update=True):
+        if update:
+            self.update_data()
+        return(array(self.data[finger]))
+
+    def get_force(self, finger, blocking=True, update=True):
+        if update:
+            self.update_data(blocking=blocking)
+        return(self.data[finger][-3:])
+
 
 def main():
     return(False)
