@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #Object parameters file.
 from numpy import array, identity, pi
-import LS
+from cmoc.objects.sliding import LS
 
 class Object_params(object):
     def __init__(self):

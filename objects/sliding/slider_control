@@ -163,7 +163,7 @@ def approach_until_touch(hand_handle, finger, arm_handle, force_handle, touch_po
     #if False:
     if not sim:
         force_threshold=max_noise_norm_force*1.3
-    raw_input()
+    #raw_input()
 
     force=array([0.]*3)
     init_time=time.time()
@@ -597,7 +597,7 @@ class Control(Controlloop):
         crossing_faces_local=find_crossing_faces(self.goal_vector_object_local, array([0.,0.,0]), self.obj_par.box_vertices, self.obj_par.box_planes)
         touch_point,self.touch_face=most_far_away_face_from_point(crossing_faces_local, self.xo, self.xo_ref[:3,3])
         print "Touch point global", touch_point, self.touch_face
-        raw_input()
+        #raw_input()
         #eliminate touch point that is too near to corners
         no_touch_angle=0.8*self.box_sides_angle
         rxy_rel=touch_point-self.xo[:3,3]
@@ -612,7 +612,7 @@ class Control(Controlloop):
             print "Moving touch point away from corner, positive rotation"
             touch_point=dot(self.xo, homo_matrix(trans=(dot(rot_z(self.box_sides_angle-no_touch_angle),rxy))))[:3,3]
 
-        raw_input()
+        #raw_input()
         self.finger_start_offset=identity(4)
         #self.finger_start_offset[:2,3]=array([0.03,0.,0.])
         avoid_col, finger_start_pose, new_touch_point=self.finger_away_touch_point(touch_point)
@@ -624,7 +624,7 @@ class Control(Controlloop):
         self.harm_bridge.cartesian_controller()
         move_robot(self.hand_right_server, self.finger, self.harm, avoid_col, [0.03, 5.*pi/180.], extra_tool=self.rel_pose_marker_finger)
         dprint("avoid colision position")
-        raw_input()
+        #raw_input()
         #move finger to start position
         move_robot(self.hand_right_server, self.finger, self.harm, finger_start_pose, [0.03, 5.*pi/180.], wait=0., extra_tool=self.rel_pose_marker_finger)
         move_robot(self.hand_right_server, self.finger, self.harm, finger_start_pose, [0.03, 5.*pi/180.],extra_tool=self.rel_pose_marker_finger)
@@ -658,7 +658,7 @@ class Control(Controlloop):
         finger_approach_speed=0.03
         approach_until_touch(self.hand_right_server, self.finger, self.harm, self.hforce, new_touch_point, force_threshold, self.goal_precision, finger_approach_speed, finger_start_pose, self.simulation, extra_tool=self.rel_pose_marker_finger)
         eprint("Done")
-        raw_input()
+        #raw_input()
 
         #getting finger position
         force_data=self.hforce.get_data_finger(self.finger)
