@@ -17,7 +17,7 @@
 
 import cmoc.robot.sahand as sahand
 from arcospyu.control.nanosleep import nanosleep
-from time import sleep
+import time
 from math import *
 from numpy import array,concatenate
 import sys
@@ -32,6 +32,15 @@ def signal_handler(signum, frame):
     import sys
     sys.exit()
 
+
+from math import pi
+def deg2rad(deg):
+    return (deg*pi/180.0)
+
+def port2index(port):
+    # As ports are defined right now, the index is obtained by substracting one
+    # This may change in the future
+    return port-1
 
 class DummyFinger(object):
     def __init__(self):
@@ -53,7 +62,7 @@ def calProcedure(hand):
     #move the thumb to zeros
     hand.thumb.move((5, 5, 5), (100, 100, 100))
 
-    sleep(0.5)
+    time.sleep(0.5)
 
     #move the rest of the fingers back
     for finger in hand:
@@ -64,11 +73,11 @@ def calProcedure(hand):
         finger._set_stiffness((0.14, 0.49, 0.49))
         nanosleep(0, 50000000)
 
-    sleep(2)
+    time.sleep(2)
 
     #go into position mode!
     hand.set_controller(sahand.CONTROLLER_POSITION)
-    sleep(2)
+    time.sleep(2)
 
     #hand.set_controller(sahand.CONTROLLER_RESET)
     #sleep(0.2)
@@ -80,7 +89,7 @@ def calProcedure(hand):
         nanosleep(0, 50000000) #We have to sleep or the clear_torque doesn't work
 
     print "Done!"
-    sleep(0.3)
+    time.sleep(0.3)
 
     #hand.set_controller(sahand.CONTROLLER_RESET)
     #hand.set_controller(sahand.CONTROLLER_POSITION)
@@ -108,7 +117,7 @@ def scalProcedure(hand):
         finger.clear_torque_sensor_offset()
         nanosleep(0, 50000000) #We have to sleep or the clear_torque doesn't work
 
-    sleep(0.3)
+    time.sleep(0.3)
 
     print "Done!"
 
@@ -116,16 +125,16 @@ def scalProcedure(hand):
 def enablefingers(hand):
     #Enable the fingers
     hand.thumb.unbrake_base()
-    sleep(0.05)
+    time.sleep(0.05)
     for finger in hand:
         finger.enable()
-        sleep(0.1)
+        time.sleep(0.1)
         #Set the initial impedances
         finger._set_stiffness((0.05, 0.15, 0.15))
-        sleep(0.05)
+        time.sleep(0.05)
     #Thumb is harder
     hand.thumb._set_stiffness((0.05, 0.18, 0.15))
-    sleep(0.05)
+    time.sleep(0.05)
     #Release the emergency stop, ready to go!
     hand.disable_emergency_stop() 
 
@@ -424,43 +433,40 @@ class Hand_sim(object):
         #TODO
         pass
 
-import time
 
 class Sahboard_sim(object):
     def __init__(self,basename, hands_config, enabled_hands=[True,True]):
         self.enabled_hands=enabled_hands
         self.hands=[]
-        self.hands.append(Hand_sim(sahand.PORT_1,basename, hands_config))
-        self.hands.append(Hand_sim(sahand.PORT_2,basename, hands_config))
+        if self.enabled_hands[0]:
+            self.hands.append(Hand_sim(sahand.PORT_1,basename, hands_config))
+        if self.enabled_hands[1]:
+            self.hands.append(Hand_sim(sahand.PORT_2,basename, hands_config))
         self.counter=0
         self.previous_time=time.time()
         self.cur_time=time.time()
         self.frequency=60.
         self.period=1.0/self.frequency
         self.ref_next_time=self.cur_time+self.period
-            
 
-    def is_connected(self,port):
-        if port == sahand.PORT_1:
-            if self.enabled_hands[0]:
-                return(True)
-        elif port == sahand.PORT_2:
-            if self.enabled_hands[1]:
-                return(True)
-        return(False)
+
+    def is_connected(self,port=sahand.PORT_1):
+        if port in [sahand.PORT_1, sahand.PORT_2]:
+            return self.enabled_hands[port2index(port)]
+            
+        print("ERROR! Invalid hand "+str(port)) 
+        return False
 
     def get_counter(self):
         self.cur_time=time.time()
         wait_time=self.ref_next_time-self.cur_time
         if wait_time>0:
-            #print "Waiting for ", wait_time
             time.sleep(wait_time)
         else:
             print "Not enough time"
         self.ref_next_time+=self.period
         for hand in self.hands:
             for finger in hand:
-                #print "Hand", hand.port
                 finger.update()
         self.counter+=1
         return(self.counter)
@@ -485,39 +491,46 @@ def main():
     parser.add_option("-n", "--newformat", action="store_true", dest="newformat", default=False,
                       help="selects new format for the yarp input and output (NEWFORMAT)", metavar="NEWFORMAT")
     parser.add_option("-f", "--config_filename", dest="config_filename", default="hands_kin.py", type="string", help="config filename for hands")
+
+    parser.add_option("-r", "--no-left", action="store_true", dest="no_left", default=False,
+                      help="Do not use left hand, only right")
     (options, args) = parser.parse_args()
 
     from arcospyu.config_parser.config_parser import import_config
-    hands_kin=import_config(options.config_filename)
+    hands_kin_config=import_config(options.config_filename)
 
     if not options.dis_ros:
         rospub = ROSPublisher()
 
-    left_hand=sahand.PORT_2
+    right_hand_port = sahand.PORT_1
+    left_hand_port  = sahand.PORT_2
 
     basename="/sahand"
     
-    import yarp
     yarp.Network.init()
 
     if options.sim:
-        sahboard=Sahboard_sim(basename, hands_kin)
+        enabled_hands = [True, not(options.no_left)]
+        sahboard=Sahboard_sim(basename, hands_kin_config, enabled_hands = enabled_hands)
     else:
+        #FIXME: add no_left option here
         sahboard=sahand.Sahboard()
     #Instantiate the Hand
+    #This dictionaty is used to have the capability of hot inserting or removing
+    #hands
     hands={}
-    for port,hand in zip([sahand.PORT_1,sahand.PORT_2],sahboard.hands):
+    for port in [right_hand_port, left_hand_port]:
         if sahboard.is_connected(port):
-            hands[port]=hand
-            print "Hand in port", port , "connected"
+            hands[port] = sahboard.hands[port2index(port)]
+            print("Hand in port "+str(port)+" connected")
         else:
-            print "Hand in port", port, "not present"
+            print("Hand in port "+str(port)+" NOT present")
+            
     print len(hands), "hands detected"
+    
     #We should move each finger to the zero position using position-control
     # then recalibrate the torque sensors
     # then we can switch into (joint) impedance control
-    from time import sleep
-
     for hand in hands.values():
         enablefingers(hand)
 
@@ -540,12 +553,7 @@ def main():
 
     cmdp = yarp.BufferedPortBottle()
     cmdp.open(basename+"/cmd")
-
-
-    from math import pi
-    def deg2rad(deg):
-        return (deg*pi/180.0)
-
+    
     counter=0
     fingerDicts={}
 
@@ -557,39 +565,38 @@ def main():
 
     # Big loop:
     while (go_on):
+        #FIXME:
+        #This method has the side effect of waiting!
         newcounter = sahboard.get_counter()
 
         if (newcounter != counter):
             counter = newcounter
 
             #updating present hands
-            if sahboard.is_connected(sahand.PORT_1):
+            if sahboard.is_connected(right_hand_port):
                 newhandstate[0] = True
             else:
                 newhandstate[0] = False
-            if sahboard.is_connected(sahand.PORT_2):
+            if sahboard.is_connected(left_hand_port):
                 newhandstate[1] = True
             else:
                 newhandstate[1] = False
 
             if newhandstate != handstate:
-                for hand in sahboard.hands:
-                    if sahboard.is_connected(hand.port):
-                        hands[hand.port] = hand
-                    else:
-                        if hand.port in hands:
-                            print "Hand",hand.port,"off"
-                            del hands[hand.port]
-                for i in range(2):
-                    if newhandstate[i] == True and handstate[i] == False:
-                        #New hand, enable hand and fingers
+                # new hand connected, or hand disconnected
+                for hand_port in [right_hand_port, left_hand_port]:
+                    if sahboard.is_connected(hand_port):
+                        print "port", hand_port
                         print "New hand!, initializing it"
-                        if i == 0:
-                            enablefingers(hands[sahand.PORT_1])
-                            calProcedure(hands[sahand.PORT_1])
-                        if i == 1:
-                            enablefingers(hands[sahand.PORT_2])
-                            calProcedure(hands[sahand.PORT_2])
+                        hands[hand_port] = sahboard.hands[port2index(hand_port)]
+                        enablefingers(hands[hand_port])
+                        calProcedure(hands[hand_port])
+                    else:
+                        print ("Hand "+str(hand_port)+" off")
+                        if hand_port in hands:
+                            del hands[hand_port]
+                        else:
+                            print("Hand was already destroyed")
 
                 for port,hand in zip(hands.keys(),hands.values()):
                     fingerDict = {}
@@ -597,14 +604,13 @@ def main():
                     fingerDict["first"] = hand.first
                     fingerDict["middle"] = hand.middle
                     fingerDict["ring"] = hand.ring
+                    #FIXME: add pinky! this is in anoter branch :(
                     fingerDicts[port] = fingerDict
                 handstate=list(newhandstate)
 
-            for port,hand in zip(hands.keys(),hands.values()):
-                if port == sahand.PORT_1:
-                    outp = outps[0]
-                if port == sahand.PORT_2:
-                    outp = outps[1]
+            for port in hands.keys():
+                hand = hands[port]
+                outp = outps[port]
                 bout = outp.prepare()
                 bout.clear()
 
@@ -618,7 +624,7 @@ def main():
                     bout.addDouble(hand.thumb.base_angle)
                 fingerList = (hand.thumb,hand.first,hand.middle,hand.ring)
 
-                if port != left_hand:
+                if port != left_hand_port:
                     for finger in fingerList:
                         bottleTemp = bout.addList()
                         if options.newformat:
@@ -678,20 +684,15 @@ def main():
                 rospub.publish_diagnostic_state(hands)
 
             #Do the yarp actions
-            for port,hand in zip(hands.keys(),hands.values()):
-                if port == sahand.PORT_1:
-                    inp = inps[0]
-                if port == sahand.PORT_2:
-                    inp = inps[1]
-
+            for port in hands.keys():
+                hand = hands[port]
+                inp = inps[port]
                 bin = inp.read(False)
 
                 if (bin):
                     #We expect the following formats:
                     #(fingerName (angles, speed, stiffness) thumbBaseAngle)
-
-                    #print "Changing ", bin.size(), " fingers"
-                    #print "Receive: ", bin.toString()
+                    
                     for fingerbottle in map(yarp.Value.asList,map(bin.get,range(bin.size()))):
                         valuesbottle=fingerbottle.get(1).asList()
 
@@ -719,7 +720,7 @@ def main():
                             print "Invalid list size, ignoring command"
                             continue
                         try:
-                            if port==left_hand:
+                            if port==left_hand_port:
                                 if options.newformat:
                                     angles[2] = angles[2]
                                 else:
@@ -761,11 +762,6 @@ def main():
                             scalProcedure(hands[sahand.PORT_2])
                     else:
                         print "Received invalid command: %s"%(cmd)
-
-        else:
-            #pass
-            #print ".",
-            nanosleep(0, 500000)  #250000
 
     yarp.Network.fini()
 
