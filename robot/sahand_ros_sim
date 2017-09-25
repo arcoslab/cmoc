@@ -1,0 +1,157 @@
+#!/usr/bin/python
+# Copyright (c) 2009,2010 Technische Universitaet Muenchen, Informatik Lehrstuhl IX.
+# Author: Alexis Maldonado-Herrera <maldonad at in.tum.de>, Federico Ruiz-Ugalde <ruizf at in.tum.de>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your optin) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+import cmoc.robot.sahand as sahand
+from arcospyu.control.nanosleep import nanosleep
+from time import sleep
+from math import *
+from numpy import array,concatenate
+import sys
+import yarp
+from optparse import OptionParser
+import time
+
+class ROSRate:
+    def __init__(self, rate):
+        import roslib
+        roslib.load_manifest('rospy')
+        import rospy
+        self.rospy = rospy
+
+        self.rate = self.rospy.Duration(rate)
+        self.last_publish_time = self.rospy.Time.now()
+
+    def ready(self):
+        now = self.rospy.Time.now()
+        return self.last_publish_time + self.rate < now
+
+    def tick(self):
+        now = self.rospy.Time.now()
+        rate3 = self.rospy.Duration(self.rate.to_sec()*3.0)
+        if (now - self.last_publish_time) > rate3 or (now - self.last_publish_time) < rate3:
+            self.last_publish_time = now
+        else:
+            last_publish_time += rate
+
+
+class ROSPublisher:
+    def __init__(self, rate=0.05):
+        import roslib
+        roslib.load_manifest('sahand_api')
+
+        import rospy
+        from sensor_msgs.msg import JointState
+        from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+        self.rospy = rospy
+        self.JointState = JointState
+        self.DiagnosticArray = DiagnosticArray
+        self.DiagnosticStatus = DiagnosticStatus
+        self.KeyValue = KeyValue
+
+        rospy.init_node('sahand_api')
+        self.pub = rospy.Publisher('joint_states', JointState)
+        self.pub_diag = rospy.Publisher('/diagnostics', self.DiagnosticArray)
+        self.rate = ROSRate(rate)
+        self.diag_rate = ROSRate(1.0)
+        self.TEMP_WARN = 50.0
+        self.TEMP_ERR = 60.0
+
+    def publish_joint_states(self, hands):
+        if not self.rate.ready():
+            return
+
+        self.rate.tick()
+
+        sides = {sahand.HAND_CONFIG_LEFT: "left", sahand.HAND_CONFIG_RIGHT: "right"}
+        fingers = ["thumb", "fore_finger", "middle_finger", "ring_finger"]
+        joints = ["distal", "proximal", "base"]
+        js=self.JointState()
+        for hand in hands.values():
+            s = hand.get_hand_config()
+
+            # publish thumb base joint
+            js.name.append(("%s_hand_thumb_joint") % (sides[s]))
+            js.position.append(hand.thumb.base_angle*pi/180.0)
+            js.velocity.append(0.0)
+            js.effort.append(0.0)
+
+            # publish finger joints
+            for f, finger in enumerate((hand.thumb, hand.first, hand.middle, hand.ring)):
+                for j, joint in enumerate(finger.angles):
+                    js.name.append(("%s_hand_%s_%s_joint") % (sides[s], fingers[f], joints[j]))
+                    js.position.append(joint*pi/180.0)
+                    js.velocity.append(0.0)
+                    js.effort.append(0.0)
+                    if j == 0:
+                        # the distal joint angle maps to two robot joints
+                        js.name.append(("%s_hand_%s_middle_joint") % (sides[s], fingers[f]))
+                        js.position.append(joint*pi/180.0)
+                        js.velocity.append(0.0)
+                        js.effort.append(0.0)
+                        
+        js.header.stamp = self.rospy.Time.now()
+        if len(hands) > 0:
+            self.pub.publish(js)
+
+    def publish_diagnostic_state(self, hands):
+        if not self.diag_rate.ready():
+            return
+        self.diag_rate.tick()
+
+        sides_present = {'left': 0, 'right': 0}
+
+        status = self.DiagnosticStatus.OK
+        message = ''
+        values = []
+
+        for hand in hands.values():
+            side = {sahand.HAND_CONFIG_LEFT: "left", sahand.HAND_CONFIG_RIGHT: "right"}[hand.get_hand_config()]
+            sides_present[side] = 1
+            kv = self.KeyValue()
+            kv.key = '%s hand' % side
+            kv.value = 'present'
+            values.append(kv)
+            # hand.temp (palm temperature) is not working ...
+            for i,finger in enumerate(hand):
+                kv = self.KeyValue()
+                kv.key = "%s %s temp" % (side, ["thumb", "index finger", "middle finger", "ring finger"][i])
+                kv.value = '%.1f' % finger.temp
+                values.append(kv)
+
+                if finger.temp > self.TEMP_ERR:
+                    message += '[' + kv.key + ' burning] '
+                    status = max(status, self.DiagnosticStatus.ERROR)
+                elif finger.temp > self.TEMP_WARN:
+                    message += '[' + kv.key + ' too hot] '
+                    status = max(status, self.DiagnosticStatus.WARN)
+
+
+        if message == '':
+            message = 'no hand'
+            if sides_present['left'] and sides_present['right']:
+                message = 'left and right hand ok'
+            elif sides_present['left']:
+                message = 'left hand ok'
+            elif sides_present['right']:
+                message = 'right hand ok'
+
+        msg = self.DiagnosticArray()
+        msg.status = [self.DiagnosticStatus(status, 'hands', message, 'DLR HIT Hands', values)]
+        msg.header.stamp = self.rospy.Time.now()
+
+        self.pub_diag.publish(msg)
+

@@ -125,6 +125,7 @@ def read_finger(yarp_port, blocking, finger):
     force=array(map(yarp.Value.asDouble,map(bottle.get, range(7,10))))
     return(trans,rot,force)
 
+#FIXME: this function is not being used. Check if it is really neaded
 
 def move_robot_fast(hand_handle, finger, arm_handle, pose, goal_precision, extra_tool=identity(4), update_finger_cart=True):
     #hand_handle.update_sensor_data()
@@ -136,7 +137,7 @@ def move_robot_fast(hand_handle, finger, arm_handle, pose, goal_precision, extra
     #arm_handle.gotoFrame(pose.reshape(16), wait=0.0, goal_precision=goal_precision)
     arm_handle.gotoPose(pose[:3,3], pose[:3,:3].reshape(9))
 
-def move_robot(hand_handle, finger, arm_handle, pose, goal_precision, wait=10.0, extra_tool=identity(4), update_finger_cart=True):
+def move_robot(hand_handle, finger, arm_handle, pose, goal_precision, wait=10.0, extra_tool=identity(4), update_finger_cart=True, fast_mode=False):
     if update_finger_cart:
         hand_handle.update_sensor_data()
         finger_cart=hand_handle.fingers[finger].get_cart_pos()
@@ -145,7 +146,7 @@ def move_robot(hand_handle, finger, arm_handle, pose, goal_precision, wait=10.0,
         print "SET TOOL"
         arm_handle.setTool(narray_to_kdlframe(tool_pose))
     print "GOTO POSE"
-    arm_handle.gotoFrame(pose.reshape(16), wait=wait, goal_precision=goal_precision)
+    arm_handle.gotoFrame(pose.reshape(16), wait=wait, goal_precision=goal_precision, fast_mode=fast_mode)
     print "END GOTO POSE"
 
 def near(num1,num2,epsilon=1e-10):
