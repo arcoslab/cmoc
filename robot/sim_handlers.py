@@ -48,7 +48,7 @@ class Finger_sim():
 class Hand_sim():
     def __init__(self,handedness,sahand_port):
         self.fingers_sim_client=[]
-        for i in xrange(4):
+        for i in xrange(5):
             self.fingers_sim_client.append(Finger_sim("/torque_sim_"+handedness,i,"/sahand"+str(sahand_port)+"/finger"+str(i)))
         #self.fingers_sim_client=map(Finger_sim, [["/torque_sim_"+handedness,i,"/sahand"+str(sahand_port)+"/finger"+str(i)] for i in xrange(4)])
 
@@ -58,7 +58,7 @@ class Hand_sim():
 
     def set_torques_np(self,torques):
         #print "Torques", torques
-        for i in xrange(4):
+        for i in xrange(5):
             #print "Torques", torques[i,:]
             self.fingers_sim_client[i].set_torques(torques[i,:])
 

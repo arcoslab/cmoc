@@ -191,7 +191,7 @@ class ROSPublisher:
         self.rate.tick()
 
         sides = {sahand.HAND_CONFIG_LEFT: "left", sahand.HAND_CONFIG_RIGHT: "right"}
-        fingers = ["thumb", "fore_finger", "middle_finger", "ring_finger"]
+        fingers = ["thumb", "fore_finger", "middle_finger", "ring_finger", "pinky_finger"]
         joints = ["distal", "proximal", "base"]
         js=self.JointState()
         for hand in hands.values():
@@ -242,7 +242,7 @@ class ROSPublisher:
             # hand.temp (palm temperature) is not working ...
             for i,finger in enumerate(hand):
                 kv = self.KeyValue()
-                kv.key = "%s %s temp" % (side, ["thumb", "index finger", "middle finger", "ring finger"][i])
+                kv.key = "%s %s temp" % (side, ["thumb", "index finger", "middle finger", "ring finger", "pinky_finger"][i])
                 kv.value = '%.1f' % finger.temp
                 values.append(kv)
 
@@ -379,7 +379,7 @@ class Thumb_sim(Finger_sim):
     def __init__(self,port,basename,finger, hands_config):
         Finger_sim.__init__(self,port,basename,finger, hands_config)
         self.ref_angles=array((5.,5.,0.,0.))
-        self.max_base_vel=100.
+        self.max_base_vel=0 #New had does not have this joint
         self.ref_vels=array((20.,20.,20.,self.max_base_vel))
         self.base_braked=False
         self._base_angle=0.
@@ -388,7 +388,8 @@ class Thumb_sim(Finger_sim):
         self.base_braked=False
 
     def _get_base_angle(self):
-        return(self._base_angle)
+        #New hand does not have this joint
+        return(0.0)
     
     base_angle=property(_get_base_angle)
 
@@ -398,7 +399,8 @@ class Thumb_sim(Finger_sim):
         self.sim.set_q_ref(self.ref_angles*pi/180.0)
 
     def move_base(self,angle):
-        self.ref_angles[-1]=angle
+        #New hand does not have this joint. We shouldn't move it.
+        self.ref_angles[-1]=0
         print "Moving base", self.ref_angles
         self.sim.set_q_ref(self.ref_angles*pi/180.0)
 
@@ -413,10 +415,11 @@ class Hand_sim(object):
         self.first=Finger_sim(self.port,basename,1, hands_config)
         self.middle=Finger_sim(self.port,basename,2, hands_config)
         self.ring=Finger_sim(self.port,basename,3, hands_config)
+        self.pinky=Finger_sim(self.port,basename,4,hands_config)
         self.emergency_stop=False
 
     def __iter__(self):
-        return iter([self.thumb, self.first, self.middle, self.ring])
+        return iter([self.thumb, self.first, self.middle, self.ring, self.pinky])
 
     def disable_emergency_stop(self):
         self.emergency_stop=False
@@ -544,11 +547,16 @@ def main():
 
     inps = []
     outps = []
-    for i in range(2):
+    outps.append(yarp.BufferedPortBottle())
+    inps.append(yarp.BufferedPortBottle())
+    outps[-1].open(basename+str(0)+"/out")
+    inps[-1].open(basename+str(0)+"/in")
+    inps[-1].setStrict()
+    if not options.no_left:
         outps.append(yarp.BufferedPortBottle())
         inps.append(yarp.BufferedPortBottle())
-        outps[-1].open(basename+str(i)+"/out")
-        inps[-1].open(basename+str(i)+"/in")
+        outps[-1].open(basename+str(1)+"/out")
+        inps[-1].open(basename+str(1)+"/in")
         inps[-1].setStrict()
 
     cmdp = yarp.BufferedPortBottle()
@@ -604,13 +612,14 @@ def main():
                     fingerDict["first"] = hand.first
                     fingerDict["middle"] = hand.middle
                     fingerDict["ring"] = hand.ring
-                    #FIXME: add pinky! this is in anoter branch :(
+                    fingerDict["pinky"]=hand.pinky
                     fingerDicts[port] = fingerDict
                 handstate=list(newhandstate)
 
+            
             for port in hands.keys():
                 hand = hands[port]
-                outp = outps[port]
+                outp = outps[port2index(port)]
                 bout = outp.prepare()
                 bout.clear()
 
@@ -622,7 +631,7 @@ def main():
                     bout.addDouble(hand.thumb.base_angle*pi/180.0)
                 else:
                     bout.addDouble(hand.thumb.base_angle)
-                fingerList = (hand.thumb,hand.first,hand.middle,hand.ring)
+                fingerList = (hand.thumb,hand.first,hand.middle,hand.ring, hand.pinky)
 
                 if port != left_hand_port:
                     for finger in fingerList:
@@ -686,7 +695,7 @@ def main():
             #Do the yarp actions
             for port in hands.keys():
                 hand = hands[port]
-                inp = inps[port]
+                inp = inps[port2index(port)]
                 bin = inp.read(False)
 
                 if (bin):

@@ -24,11 +24,12 @@ from arcospyu.control import nanosleep
 import pickle
 
 
-THUMB=0
-FIRST_FINGER=1
-MIDDLE_FINGER=2
-RING_FINGER=3
-all_finger_list=[THUMB,FIRST_FINGER,MIDDLE_FINGER,RING_FINGER]
+THUMB        = 0
+FIRST_FINGER = 1
+MIDDLE_FINGER= 2
+RING_FINGER  = 3
+PINKY_FINGER = 4
+all_finger_list=[THUMB,FIRST_FINGER,MIDDLE_FINGER,RING_FINGER, PINKY_FINGER]
 
 def weighted_pseudo_inverse(matrix, weight_left, weight_right):
     U,s,Vh=svd(dot(dot(weight_left,matrix),weight_right))
@@ -398,7 +399,7 @@ class Finger(object):
         self.handedness=handedness
         self.num_finger=num_finger
         if self.num_finger==THUMB:
-            self.num_joints=4
+            self.num_joints=4 # FIXME: Change thumb to have 3 joints
         else:
             self.num_joints=3
         self.torque_controlled_num_joints=3
@@ -543,10 +544,10 @@ def controller_f(cmd_queue,ack_queue,handedness,sahand_number,portprefix,sahand_
     torques_field=range(6,9)
     SEQUENCE_FIELD=0
     THUMB_ANGLE_FIELD=1
-    fingers_string=["thumb","first","middle","ring"]
+    fingers_string=["thumb","first","middle","ring", "pinky"]
     client_port_name_suffix="/hand_client"
     fingers=[]
-    num_fingers_from_server=4
+    num_fingers_from_server=5
     for num_finger in xrange(num_fingers_from_server):
         fingers.append(Finger(config_hand, num_finger,handedness))
     yarp.Network.init()
@@ -634,7 +635,7 @@ def controller_f(cmd_queue,ack_queue,handedness,sahand_number,portprefix,sahand_
     fingers_state=[]
     num_of_parameters_server=3
     last_time=time.time()
-    out_data=array([[[0.]*4]*3]*4)
+    out_data=array([[[0.]*4]*3]*5)
 
     while True:
         new_cmd=False
@@ -744,7 +745,7 @@ class Hand(object):
         self.handedness=handedness
         self.fingers=[]
 #        self.fingers_string=["thumb","first","middle","ring"]
-        self.num_fingers_from_server=4
+        self.num_fingers_from_server=5
         for num_finger in xrange(self.num_fingers_from_server):
             self.fingers.append(Finger(self.config_hand, num_finger,handedness))
         self.controller_p.start()
@@ -801,7 +802,7 @@ class Hand(object):
 #            print "New data received"
         for num_finger in xrange(self.num_fingers_from_server):
                 finger_data=result
-                if num_finger==0:
+                if num_finger==0: #FIXME thumb shoul only have 3 joints
                     self.fingers[num_finger].update_cur_joint_pos(finger_data[num_finger,0],offset=False)
                     self.fingers[num_finger].update_cur_joint_vel(finger_data[num_finger,1])
                 else:

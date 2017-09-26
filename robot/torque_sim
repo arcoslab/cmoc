@@ -58,29 +58,30 @@ class Sim_torques():
     '''class that connects to arms and hands and calculates torques given a force'''
     def __init__(self, config_lwr_right, config_lwr_left, config_hand, baseportname="/torque_sim"):
         arm_joint_num=7
+        self.fingers_cant = 5
         self.enabled_left = not (config_lwr_left == None)
         self.rarmj_handle=Handle_arm_joints("/lwr/right",handlername=baseportname+"/arm_joints")
         self.rhand=Hand(config_hand, handedness="right",sahand_number=0, portprefix=baseportname+"/hand_handler")
         self.rarm_robot=Lafik(import_config(config_lwr_right))
-        self.sim_forces_right=[array([0.]*3)]*4
-        self.est_forces_right=[array([0.]*3)]*4
+        self.sim_forces_right=[array([0.]*3)]*self.fingers_cant
+        self.est_forces_right=[array([0.]*3)]*self.fingers_cant
         self.finger_tip_right=[array([[1.,0.,0.,0.],
                                       [0.,1.,0.,0.],
                                       [0.,0.,1.,0.],
-                                      [0.,0.,0.,1.]])]*4
-        self.rhand_torques=array([[0.]*3]*4)        
+                                      [0.,0.,0.,1.]])]*self.fingers_cant
+        self.rhand_torques=array([[0.]*3]*self.fingers_cant)        
         self.arm_torques_right=array([0.]*arm_joint_num)
         if self.enabled_left:
             self.larmj_handle=Handle_arm_joints("/lwr/left",handlername=baseportname+"/arm_joints")
             self.lhand=Hand(config_hand, handedness="left",sahand_number=1, portprefix=baseportname+"/hand_handler")
             self.larm_robot=Lafik(import_config(config_lwr_left))
-            self.sim_forces_left=[array([0.]*3)]*4
-            self.est_forces_left=[array([0.]*3)]*4
+            self.sim_forces_left=[array([0.]*3)]*self.fingers_cant
+            self.est_forces_left=[array([0.]*3)]*self.fingers_cant
             self.finger_tip_left=[array([[1.,0.,0.,0.],
                                          [0.,1.,0.,0.],
                                          [0.,0.,1.,0.],
-                                         [0.,0.,0.,1.]])]*4
-            self.lhand_torques=array([[0.]*3]*4)
+                                         [0.,0.,0.,1.]])]*self.fingers_cant
+            self.lhand_torques=array([[0.]*3]*self.fingers_cant)
             self.arm_torques_left=array([0.]*arm_joint_num)
 
         self.wrench=Wrench()
@@ -200,7 +201,7 @@ class Sim_torques():
             return(dot(self.larm_frame[:3,:3],self.lhand.fingers[finger].get_forces()[:3]))
 
     def get_forces(self):
-        for finger in xrange(4):
+        for finger in xrange(self.fingers_cant):
             #if finger==0:
             #    print "Torques", self.rhand.fingers[finger].get_torques()
             self.est_forces_right[finger]=self.get_force(0,finger)
@@ -215,7 +216,7 @@ class Force_input():
     def __init__(self,baseportname):
         self.force_input_port=yarp.BufferedPortBottle()
         self.force_input_port.open(baseportname+"/force_in")
-        self.forces=[array([0.]*3)]*8
+        self.forces=[array([0.]*3)]*10
 
     def get_force(self):
         force_input_bottle=self.force_input_port.read(False)
@@ -260,9 +261,9 @@ def main():
     simulation_on=False
     parser=optparse.OptionParser("usage: %prog [options]")
     parser.add_option("-s", "--simulation", action="store_true", dest="sim", default=False,help="Simulation")
-    parser.add_option("-a", "--config_dir_arms", dest="config_dir_arms", default="robot_description/tum-rosie/kinematics/lwr", type="string", help="Arms config directory")
-    parser.add_option("-c", "--finger_cal_data", dest="finger_cal_data_filename", default="robot_description/tum-rosie/kinematics/sahand/calibration_data/finger_calibration_data.py", type="string", help="Finger calibration data filename")
-    parser.add_option("-f", "--config_hands", dest="config_hands", default="robot_description/tum-rosie/kinematics/sahand/hands_kin.py", type="string", help="hands config filename")
+    parser.add_option("-a", "--config_dir_arms", dest="config_dir_arms", default="robot_description/arcosbot/kinematics/lwr", type="string", help="Arms config directory")
+    parser.add_option("-c", "--finger_cal_data", dest="finger_cal_data_filename", default="robot_description/arcosbot/kinematics/sahand/calibration_data/finger_calibration_data.py", type="string", help="Finger calibration data filename")
+    parser.add_option("-f", "--config_hands", dest="config_hands", default="robot_description/arcosbot/kinematics/sahand/hands_kin.py", type="string", help="hands config filename")
     parser.add_option("-r", "--no-left", dest="no_left", action="store_true", default=False, help="Disable left arm")
     (options, args)= parser.parse_args(sys.argv[1:])
 
@@ -277,9 +278,11 @@ def main():
 
     if options.no_left:
         sim_torques=Sim_torques(config_lwr_right, None, config_hands)
+        finger_cant = 5
     else:
         sim_torques=Sim_torques(config_lwr_right, config_lwr_left, config_hands)
-
+        finger_cant = 10
+        
     if simulation_on:
         joint_sim_client_right=Joint_sim("/torque_sim/right","/lwr/right/joint_sim")
         rhand_sim_client=Hand_sim("right",0)
@@ -310,10 +313,6 @@ def main():
         larm_id=view_objects.create_object("frame")
         view_objects.send_prop(larm_id,"scale",[0.07, 0.07,0.07])
     #finger frames
-    if options.no_left:
-        finger_cant = 4
-    else:
-        finger_cant = 8
     finger_frame_ids=[view_objects.create_object("frame") for i in xrange(finger_cant)]
     view_objects.send_prop_multi(finger_frame_ids,["scale"]*finger_cant, [[0.03]*3]*finger_cant)
 
@@ -334,17 +333,21 @@ def main():
         if counter==15:
             view_objects.send_prop(rarm_id,"pose", sim_torques.rarm_frame.reshape(16).tolist())
             if options.no_left:
-                view_objects.send_prop_multi(finger_frame_ids,["pose"]*4, [numpy.reshape(i,(16)).tolist() for i in sim_torques.finger_tip_right])
-                view_objects.send_prop_multi(finger_arrow_ids,["trans"]*4, [i[:,3][:3].tolist() for i in sim_torques.finger_tip_right])
+                view_objects.send_prop_multi(finger_frame_ids,["pose"]*finger_cant,
+                                             [numpy.reshape(i,(16)).tolist() for i in sim_torques.finger_tip_right])
+                view_objects.send_prop_multi(finger_arrow_ids,["trans"]*finger_cant,
+                                             [i[:,3][:3].tolist() for i in sim_torques.finger_tip_right])
             else:
                 view_objects.send_prop(larm_id,"pose", sim_torques.larm_frame.reshape(16).tolist())
-                view_objects.send_prop_multi(finger_frame_ids,["pose"]*8, [numpy.reshape(i,(16)).tolist() for i in sim_torques.finger_tip_right+sim_torques.finger_tip_left])
-                view_objects.send_prop_multi(finger_arrow_ids,["trans"]*8, [i[:,3][:3].tolist() for i in sim_torques.finger_tip_right+sim_torques.finger_tip_left])
+                view_objects.send_prop_multi(finger_frame_ids,["pose"]*finger_cant,
+                                             [numpy.reshape(i,(16)).tolist() for i in sim_torques.finger_tip_right+sim_torques.finger_tip_left])
+                view_objects.send_prop_multi(finger_arrow_ids,["trans"]*finger_cant,
+                                             [i[:,3][:3].tolist() for i in sim_torques.finger_tip_right+sim_torques.finger_tip_left])
         if simulation_on:
             forces=force_input.get_forces()
-            sim_torques.sim_forces_right=forces[:4]
+            sim_torques.sim_forces_right=forces[:finger_cant]
             if not options.no_left:
-                sim_torques.sim_forces_left=forces[4:]
+                sim_torques.sim_forces_left=forces[finger_cant:]
 
         rarm_torques,rhand_torques=sim_torques.get_torques_all(arm=0)
         if not options.no_left:
@@ -362,9 +365,9 @@ def main():
         if counter==15:
             counter=0
             if options.no_left:
-                view_objects.send_prop_multi(finger_arrow_ids,["axis"]*4, [i*0.1 for  i in sim_torques.est_forces_right])
+                view_objects.send_prop_multi(finger_arrow_ids,["axis"]*finger_cant, [i*0.1 for  i in sim_torques.est_forces_right])
             else:
-                view_objects.send_prop_multi(finger_arrow_ids,["axis"]*8, [i*0.1 for  i in sim_torques.est_forces_right+sim_torques.est_forces_left])
+                view_objects.send_prop_multi(finger_arrow_ids,["axis"]*finger_cant, [i*0.1 for  i in sim_torques.est_forces_right+sim_torques.est_forces_left])
 
         counter+=1
         if options.no_left:
