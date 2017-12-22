@@ -105,9 +105,9 @@ def finger_joint_move(hand_handle, finger, joint_pos, wait=0., goal_precision=0.
         while (wait==-1) or (time.time()-init_time<wait):
             hand_handle.update_sensor_data()
             cur_joint_pos=hand_handle.fingers[finger].get_joint_pos()
-            dist_to_goal=norm(cur_joint_pos-joint_pos*pi/180.)
             print "cur joint pos", cur_joint_pos*180./pi
             print "goal joint pos", joint_pos
+            dist_to_goal=norm(cur_joint_pos-joint_pos*pi/180.)
             print "Distance to goal", dist_to_goal*180./pi
             print "Goal precision", goal_precision
             if dist_to_goal<goal_precision*pi/180.:

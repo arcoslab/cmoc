@@ -6,6 +6,8 @@ sys.path.append("../sahand_api")
 from numpy import array,identity,zeros, dot, pi, concatenate, diag
 from numpy.linalg import pinv, svd
 import yarp
+cstyle=yarp.ContactStyle()
+cstyle.persistent=True
 #from hands_kin import fingers_lim,fingers_coupling, motor_locked_joints,sensor_locked_joints, sensor_finger_coupling
 #import hands_kin as kin
 import numpy
@@ -355,6 +357,8 @@ class Kinematics(object):
     def update_cur_jpos_kdl(self):
         j=0
         temp=concatenate((self.parent.cur_joint_pos,array([self.parent.cur_joint_pos[-1]])))
+        #print "TEmp: ", temp
+        #print self.parent.cur_joint_pos, self.sensor_locked_joints, self.cur_jpos_kdl
         for i,locked in enumerate(self.sensor_locked_joints):
             if locked:
                 self.cur_jpos_kdl[i]=temp[j]
@@ -399,7 +403,7 @@ class Finger(object):
         self.handedness=handedness
         self.num_finger=num_finger
         if self.num_finger==THUMB:
-            self.num_joints=4 # FIXME: Change thumb to have 3 joints
+            self.num_joints=4
         else:
             self.num_joints=3
         self.torque_controlled_num_joints=3
@@ -534,6 +538,7 @@ class Finger(object):
         #TODO
         self.kinematics.get_forces()
         self.cur_forces=self.kinematics.forces
+        #print "Num finger: ", self.num_finger, "Cur forces: ", self.cur_forces
         return(self.cur_forces)
 
 def controller_f(cmd_queue,ack_queue,handedness,sahand_number,portprefix,sahand_port_name_prefix, config_hand, cycle_frequency=5.0):
@@ -555,9 +560,9 @@ def controller_f(cmd_queue,ack_queue,handedness,sahand_number,portprefix,sahand_
     hand_port.open(portprefix+client_port_name_suffix+str(sahand_number))
     hand_port_ctrl=yarp.BufferedPortBottle()
     hand_port_ctrl.open(portprefix+client_port_name_suffix+str(sahand_number)+"/ctrl")
-    yarp.Network.connect(sahand_port_name_prefix+str(sahand_number)+"/out",portprefix+client_port_name_suffix+str(sahand_number))
-    yarp.Network.connect(portprefix+client_port_name_suffix+str(sahand_number),sahand_port_name_prefix+str(sahand_number)+"/in")
-    yarp.Network.connect(portprefix+client_port_name_suffix+str(sahand_number)+"/ctrl",sahand_port_name_prefix+"/cmd")
+    yarp.Network.connect(sahand_port_name_prefix+str(sahand_number)+"/out",portprefix+client_port_name_suffix+str(sahand_number), cstyle)
+    yarp.Network.connect(portprefix+client_port_name_suffix+str(sahand_number),sahand_port_name_prefix+str(sahand_number)+"/in", cstyle)
+    yarp.Network.connect(portprefix+client_port_name_suffix+str(sahand_number)+"/ctrl",sahand_port_name_prefix+"/cmd", cstyle)
 
     def terminate_handler(signum,stack_frame):
         print 'Signal handler called with signal', signum
@@ -797,7 +802,7 @@ class Hand(object):
         result=self.ack_queue.get()
         final_time=time.time()
         #print "Time", final_time-init_time
-#        print "Update result", result
+        #print "Update result", result
         #if result[0]=="update_sensor_data_finished":
 #            print "New data received"
         for num_finger in xrange(self.num_fingers_from_server):
