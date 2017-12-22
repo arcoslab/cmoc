@@ -66,7 +66,7 @@ def calProcedure(hand):
 
     #move the rest of the fingers back
     for finger in hand:
-        finger.move((5,5,5),(100,100,100))
+        finger.move((10,10,0),(100,100,100))
 
     #set the stiffness very high!
     for finger in hand:
@@ -123,12 +123,14 @@ def scalProcedure(hand):
 
 
 def enablefingers(hand):
+    print "Enable fingers"
     #Enable the fingers
     hand.thumb.unbrake_base()
     time.sleep(0.05)
     for finger in hand:
+        print "Finger: ", finger
         finger.enable()
-        time.sleep(0.1)
+        time.sleep(0.5)
         #Set the initial impedances
         finger._set_stiffness((0.05, 0.15, 0.15))
         time.sleep(0.05)
@@ -286,7 +288,7 @@ class Finger_sim(object):
         self.kp=0.8
         self.kvp=0.8
         self.inertia=0.1
-        self.sim_stiffness=self.kvp*self.kp
+        self.sim_stiffness=self.kvp*self.kp*0.01
         self.sim_param=[self.kp,self.kvp,self.inertia,self.sim_stiffness]
         if finger_num==0:
             self.num_joints=4
@@ -360,8 +362,9 @@ class Finger_sim(object):
         #and for thumb also self.base_angle
         sim_param_bottle=self.sim_param_port.read(False)
         if sim_param_bottle:
-            sim_param=array(map(yarp.Value.asDouble,map(sim_param_bottle.get,range(sim_param_bottle.size()))))[::-1]
-            self.sim.set_param(sim_param)
+            sim_param=map(yarp.Value.asDouble,map(sim_param_bottle.get,range(sim_param_bottle.size())))#[::-1]
+            print "Sim Param: ", sim_param, sim_param[:-3]+[sim_param[-3:]]
+            self.sim.set_param(sim_param[:-3]+[sim_param[-3:]])
         torque_in_bottle=self.torque_in_port.read(False)
         if torque_in_bottle:
             torque_in=array(map(yarp.Value.asDouble,map(torque_in_bottle.get,range(torque_in_bottle.size()))))[::-1]
@@ -517,7 +520,7 @@ def main():
         sahboard=Sahboard_sim(basename, hands_kin_config, enabled_hands = enabled_hands)
     else:
         #FIXME: add no_left option here
-        sahboard=sahand.Sahboard()
+        sahboard=sahand.Wessling_controller(basename)
     #Instantiate the Hand
     #This dictionaty is used to have the capability of hot inserting or removing
     #hands
@@ -575,7 +578,9 @@ def main():
     while (go_on):
         #FIXME:
         #This method has the side effect of waiting!
+        time.sleep(0.01)
         newcounter = sahboard.get_counter()
+        print "Counter:", newcounter
 
         if (newcounter != counter):
             counter = newcounter
@@ -616,7 +621,6 @@ def main():
                     fingerDicts[port] = fingerDict
                 handstate=list(newhandstate)
 
-            
             for port in hands.keys():
                 hand = hands[port]
                 outp = outps[port2index(port)]
@@ -751,7 +755,7 @@ def main():
                 #Now the command port
                 cmd_bin = cmdp.read(False)
                 if (cmd_bin):
-                    cmd = cmd_bin.get(0).asString().c_str()
+                    cmd = cmd_bin.get(0).asString()
                     if (cmd == 'cal0'):
                         if sahand.PORT_1 in hands:
                             calProcedure(hands[sahand.PORT_1])
