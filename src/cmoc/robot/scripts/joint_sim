@@ -1,0 +1,128 @@
+#!/usr/bin/env python
+# Copyright (c) 2009 Technische Universitaet Muenchen, Informatik Lehrstuhl IX.
+# Author: Federico Ruiz-Ugalde
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+from numpy import array
+
+from cmoc.robot.joint_controller import Controller_mass_sim, Controller_type
+
+
+def main():
+    import yarp
+    import sys
+    import time
+    from arcospyu.config_parser import ConfigFileParser
+    config_parser = ConfigFileParser(sys.argv)
+    options, args, config = config_parser.get_all()
+
+    yarp.Network.init()
+
+    joints = config.nJoints
+
+    port_base_name = '/joint_sim'
+    portbn = config.robotarm_portbasename + port_base_name
+    qvin_port = yarp.BufferedPortBottle()
+    qvinpn = portbn + '/qvin'
+    qvin_port.open(qvinpn)
+    qout_port = yarp.BufferedPortBottle()
+    qoutpn = portbn + '/qout'
+    qout_port.open(qoutpn)
+    qin_port = yarp.BufferedPortBottle()
+    qinpn = portbn + '/qin'
+    qin_port.open(qinpn)
+    torque_in_port = yarp.BufferedPortBottle()
+    torque_inpn = portbn + '/torque_in'
+    torque_in_port.open(torque_inpn)
+    sim_param_port = yarp.BufferedPortBottle()
+    sim_parampn = portbn + '/sim_param'
+    sim_param_port.open(sim_parampn)
+    stiffness_port = yarp.BufferedPortBottle()
+    stiffnesspn = config.robotarm_portbasename + '/robot/stiffness'
+    stiffness_port.open(stiffnesspn)
+
+    robotbn = config.robotarm_portbasename
+    yconnect = yarp.Network.connect
+    cstyle = yarp.ContactStyle()
+    cstyle.persistent = True
+    yconnect(qoutpn, robotbn + '/bridge/qin', cstyle)
+    yconnect(qoutpn, robotbn + '/bridge/qcmded', cstyle)
+
+    kp_m = 1.
+    kp_m = 2. # noqa
+    kp = 0.8
+    kvp = 0.8
+    inertia = 0.005
+    inertia = 0.1
+    stiffness = array([kp * kvp] * joints)
+    sim_param = [kp, kvp, inertia, stiffness]
+    sim = Controller_mass_sim(
+        kp, kvp, inertia, stiffness, joints, config.arm_extralimits)
+    sim.set_initial_time(time.time())
+
+    init_q = True
+    while True:
+        stiffness_bottle = stiffness_port.read(False)
+        if stiffness_bottle:
+            stiffness = map(
+                yarp.Value.asDouble,
+                map(stiffness_bottle.get, range(stiffness_bottle.size())))
+            sim_param[3] = stiffness
+            sim.set_param(sim_param)
+
+        sim_param_bottle = sim_param_port.read(False)
+        if sim_param_bottle:
+            sim_param = map(
+                yarp.Value.asDouble,
+                map(sim_param_bottle.get, range(sim_param_bottle.size())))
+            sim.set_param(sim_param)
+
+        qvin_bottle = qvin_port.read(False)
+        if qvin_bottle:
+            qvin = array(
+                map(
+                    yarp.Value.asDouble,
+                    map(qvin_bottle.get, range(qvin_bottle.size()))))
+            sim.set_controller(Controller_type.velocity)
+            sim.set_qv_ref(qvin)
+        qin_bottle = qin_port.read(False)
+        if qin_bottle:
+            qin = array(
+                map(
+                    yarp.Value.asDouble,
+                    map(qin_bottle.get, range(qin_bottle.size()))))
+            # sim.set_controller(Controller_type.position)
+            sim.set_q(qin)
+        if init_q:
+            sim.set_q(config.initial_joint_pos)
+            init_q = False
+        torque_in_bottle = torque_in_port.read(False)
+        if torque_in_bottle:
+            torque_in = array(
+                map(
+                    yarp.Value.asDouble,
+                    map(torque_in_bottle.get, range(torque_in_bottle.size()))))
+            sim.set_ext_torque(torque_in)
+        q = sim.get_q(time.time())
+        sim.set_joint_limits(config.updateJntLimits(q))
+        time.sleep(0.005)
+        qout_bottle = qout_port.prepare()
+        qout_bottle.clear()
+        map(qout_bottle.addDouble, q)
+        qout_port.write()
+
+
+if __name__ == '__main__':
+    main()

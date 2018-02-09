@@ -1,0 +1,890 @@
+#!/usr/bin/python
+# Copyright (c) 2009,2010 Technische Universitaet Muenchen, Informatik Lehrstuhl IX. # noqa
+# Author: Alexis Maldonado-Herrera <maldonad at in.tum.de>, Federico Ruiz-Ugalde <ruizf at in.tum.de> # noqa
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your optin) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+import cmoc.robot.sahand as sahand
+from arcospyu.control.nanosleep import nanosleep
+import time
+from time import sleep
+from math import *
+from numpy import array, concatenate
+import sys
+import yarp
+import signal
+
+go_on = True
+
+
+def signal_handler(signum, frame):
+    print('Got a signal, getting out!')
+    global go_on
+    go_on = False
+    import sys
+    sys.exit()
+
+
+class DummyFinger(object):
+    def __init__(self):
+        self.angles = [0.0, 0.0, 0.0]
+        self.speeds = [0.0, 0.0, 0.0]
+        self.torques = [0.0, 0.0, 0.0]
+
+
+def calProcedure(hand):
+
+    print 'Calibrating %s hand on port %d' % (
+        ['none', 'right', 'left'][hand.get_hand_config()], hand.port)
+    hand.set_controller(sahand.CONTROLLER_IMPEDANCE)
+    # make the fingers a bit soft
+    old_stiffnesses = []
+    for finger in hand:
+        old_stiffnesses.append(finger.stiffness)
+        finger._set_stiffness((0.03, 0.03, 0.03))
+
+    # move the thumb to zeros
+    hand.thumb.move((5, 5, 5), (100, 100, 100))
+
+    sleep(0.5)
+
+    # move the rest of the fingers back
+    for finger in hand:
+        finger.move((5, 5, 5), (100, 100, 100))
+
+    # set the stiffness very high!
+    for finger in hand:
+        finger._set_stiffness((0.14, 0.49, 0.49))
+        nanosleep(0, 50000000)
+
+    sleep(2)
+
+    # go into position mode!
+    hand.set_controller(sahand.CONTROLLER_POSITION)
+    sleep(2)
+
+    # hand.set_controller(sahand.CONTROLLER_RESET)
+    # sleep(0.2)
+
+    print 'Resetting torque offsets now!!'
+    # Now hopefully fingers are not touching each other, even if there are
+    # offsets in the torques
+    for finger in hand:
+        finger.clear_torque_sensor_offset()
+        nanosleep(
+            0, 50000000)  # We have to sleep or the clear_torque doesn't work
+
+    print 'Done!'
+    sleep(0.3)
+
+    # hand.set_controller(sahand.CONTROLLER_RESET)
+    # hand.set_controller(sahand.CONTROLLER_POSITION)
+
+    # change the impedances back to their original levels
+    i = 0
+    for finger in hand:
+        finger._set_stiffness(old_stiffnesses[i])
+        i = i + 1
+
+    hand.set_controller(sahand.CONTROLLER_IMPEDANCE)
+
+    for finger in hand:
+        finger.move((5, 5, 5), (100, 100, 100))
+
+    print 'Done!'
+
+
+def scalProcedure(hand):
+
+    print 'Calibrating hand', hand.port
+
+    print 'Resetting torque offsets now!!'
+    # Now hopefully fingers are not touching each other, even if there are
+    # offsets in the torques
+    for finger in hand:
+        finger.clear_torque_sensor_offset()
+        nanosleep(
+            0, 50000000)  # We have to sleep or the clear_torque doesn't work
+
+    sleep(0.3)
+
+    print 'Done!'
+
+
+def enablefingers(hand):
+    # Enable the fingers
+    hand.thumb.unbrake_base()
+    sleep(0.05)
+    for finger in hand:
+        finger.enable()
+        sleep(0.1)
+        # Set the initial impedances
+        finger._set_stiffness((0.05, 0.15, 0.15))
+        sleep(0.05)
+    # Thumb is harder
+    hand.thumb._set_stiffness((0.05, 0.18, 0.15))
+    sleep(0.05)
+    # Release the emergency stop, ready to go!
+    hand.disable_emergency_stop()
+
+
+class ROSRate:
+    def __init__(self, rate):
+        import roslib
+        roslib.load_manifest('rospy')
+        import rospy
+        self.rospy = rospy
+
+        self.rate = self.rospy.Duration(rate)
+        self.last_publish_time = self.rospy.Time.now()
+
+    def ready(self):
+        now = self.rospy.Time.now()
+        return self.last_publish_time + self.rate < now
+
+    def tick(self):
+        now = self.rospy.Time.now()
+        rate3 = self.rospy.Duration(self.rate.to_sec() * 3.0)
+        if (now - self.last_publish_time) > rate3 or (
+                now - self.last_publish_time) < rate3:
+            self.last_publish_time = now
+        else:
+            last_publish_time += rate
+
+
+class ROSPublisher:
+    def __init__(self, rate=0.05):
+        import roslib
+        roslib.load_manifest('sahand_api')
+
+        import rospy
+        from sensor_msgs.msg import JointState
+        from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+        self.rospy = rospy
+        self.JointState = JointState
+        self.DiagnosticArray = DiagnosticArray
+        self.DiagnosticStatus = DiagnosticStatus
+        self.KeyValue = KeyValue
+
+        rospy.init_node('sahand_api')
+        self.pub = rospy.Publisher('joint_states', JointState)
+        self.pub_diag = rospy.Publisher('/diagnostics', self.DiagnosticArray)
+        self.rate = ROSRate(rate)
+        self.diag_rate = ROSRate(1.0)
+        self.TEMP_WARN = 50.0
+        self.TEMP_ERR = 60.0
+
+    def publish_joint_states(self, hands):
+        if not self.rate.ready():
+            return
+
+        self.rate.tick()
+
+        sides = {
+            sahand.HAND_CONFIG_LEFT: 'left',
+            sahand.HAND_CONFIG_RIGHT: 'right'
+        }
+        fingers = ['thumb', 'fore_finger', 'middle_finger', 'ring_finger']
+        joints = ['distal', 'proximal', 'base']
+        js = self.JointState()
+        for hand in hands.values():
+            s = hand.get_hand_config()
+
+            # publish thumb base joint
+            js.name.append(('%s_hand_thumb_joint') % (sides[s]))
+            js.position.append(hand.thumb.base_angle * pi / 180.0)
+            js.velocity.append(0.0)
+            js.effort.append(0.0)
+
+            # publish finger joints
+            for f, finger in enumerate((hand.thumb, hand.first, hand.middle,
+                                        hand.ring)):
+                for j, joint in enumerate(finger.angles):
+                    js.name.append(
+                        ('%s_hand_%s_%s_joint') %
+                        (sides[s], fingers[f], joints[j]))
+                    js.position.append(joint * pi / 180.0)
+                    js.velocity.append(0.0)
+                    js.effort.append(0.0)
+                    if j == 0:
+                        # the distal joint angle maps to two robot joints
+                        js.name.append(
+                            ('%s_hand_%s_middle_joint') %
+                            (sides[s], fingers[f]))
+                        js.position.append(joint * pi / 180.0)
+                        js.velocity.append(0.0)
+                        js.effort.append(0.0)
+
+        js.header.stamp = self.rospy.Time.now()
+        if len(hands) > 0:
+            self.pub.publish(js)
+
+    def publish_diagnostic_state(self, hands):
+        if not self.diag_rate.ready():
+            return
+        self.diag_rate.tick()
+
+        sides_present = {'left': 0, 'right': 0}
+
+        status = self.DiagnosticStatus.OK
+        message = ''
+        values = []
+
+        for hand in hands.values():
+            side = {
+                sahand.HAND_CONFIG_LEFT: 'left',
+                sahand.HAND_CONFIG_RIGHT: 'right'
+            }[hand.get_hand_config()]
+            sides_present[side] = 1
+            kv = self.KeyValue()
+            kv.key = '%s hand' % side
+            kv.value = 'present'
+            values.append(kv)
+            # hand.temp (palm temperature) is not working ...
+            for i, finger in enumerate(hand):
+                kv = self.KeyValue()
+                kv.key = '%s %s temp' % (
+                    side,
+                    ['thumb', 'index finger', 'middle finger', 'ring finger'
+                     ][i])
+                kv.value = '%.1f' % finger.temp
+                values.append(kv)
+
+                if finger.temp > self.TEMP_ERR:
+                    message += '[' + kv.key + ' burning] '
+                    status = max(status, self.DiagnosticStatus.ERROR)
+                elif finger.temp > self.TEMP_WARN:
+                    message += '[' + kv.key + ' too hot] '
+                    status = max(status, self.DiagnosticStatus.WARN)
+
+        if message == '':
+            message = 'no hand'
+            if sides_present['left'] and sides_present['right']:
+                message = 'left and right hand ok'
+            elif sides_present['left']:
+                message = 'left hand ok'
+            elif sides_present['right']:
+                message = 'right hand ok'
+
+        msg = self.DiagnosticArray()
+        msg.status = [
+            self.DiagnosticStatus(
+                status, 'hands', message, 'DLR HIT Hands', values)
+        ]
+        msg.header.stamp = self.rospy.Time.now()
+
+        self.pub_diag.publish(msg)
+
+
+class Finger_sim(object):
+    def __init__(self, port, basename, finger_num, hands_config):
+        # sys.path.append('../../temp/hand_cart')
+        from cmoc.robot.joint_controller import Controller_mass_sim, Controller_type
+        import time
+        self.enabled = True
+        self.ref_angles = array((5., 5., 0.))
+        self.ref_vels = array((20., 20., 20.))
+        self.ext_torques_offset = array((0., 0., 0.))
+        self.ext_torques = array((0., 0., 0.))
+        self.speed = array((0., 0., 0.))
+        self._angles = array((0., 0., 0.))
+        # from hands_kin import fingers_lim
+        fingers_lim = hands_config.fingers_lim
+        self.kp = 0.8
+        self.kvp = 0.8
+        self.inertia = 0.1
+        self.sim_stiffness = self.kvp * self.kp
+        self.sim_param = [self.kp, self.kvp, self.inertia, self.sim_stiffness]
+        if finger_num == 0:
+            self.num_joints = 4
+        else:
+            self.num_joints = 3
+        self._stiffness = array([self.sim_stiffness] * 3) * pi / 180.0
+        self.sim = Controller_mass_sim(
+            self.kp, self.kvp, self.inertia, self.stiffness, self.num_joints,
+            reversed(fingers_lim[finger_num]))
+        self.sim.set_initial_time(time.time())
+        self.sim.set_controller(Controller_type.position)
+        self.torque_in_port = yarp.BufferedPortBottle()
+        self.torque_in_port.open(
+            basename + str(port - 1) + '/finger' + str(finger_num) +
+            '/torque_in')
+        self.sim_param_port = yarp.BufferedPortBottle()
+        self.sim_param_port.open(
+            basename + str(port - 1) + '/finger' + str(finger_num) +
+            '/sim_param')
+        self.finger_num = finger_num
+
+    def enable(self):
+        self.enabled = True
+
+    def _set_stiffness(self, stiffness):
+        # print 'Set stiffness', stiffness
+        self._stiffness = array(stiffness)
+        if self.num_joints == 4:
+            self.sim_param[3] = concatenate((self._stiffness,
+                                             array([1000.]))) * 180.0 / pi
+        else:
+            self.sim_param[3] = self._stiffness * 180.0 / pi
+        self.sim.set_param(self.sim_param)
+        # self.update()
+
+    def _get_stiffness(self):
+        return (self._stiffness)
+
+    stiffness = property(_get_stiffness, _set_stiffness)
+
+    def _get_angles(self):
+        return (self._angles)
+
+    angles = property(_get_angles)
+
+    def _get_speed(self):
+        self.speed = self.sim.qv[:3] * 180.0 / pi
+        return (self.speed)
+
+    speeds = property(_get_speed)
+
+    def _get_torques(self):
+        return (self.ext_torques + self.ext_torques_offset)
+
+    torques = property(_get_torques)
+
+    def set_ext_torque(self, torque):
+        self.ext_torques = torque
+        # sim.set_ext_torque(self.ext_torques+self.ext_torques_offset)
+
+    def move(self, angles, vels=(100., 100., 100.), interval=0.1):
+        print 'moving', angles
+        self.ref_angles = array(angles)
+        self.ref_vels = array(vels)
+        self.sim.set_q_ref(self.ref_angles * pi / 180.0)
+        # sim.set_qv_max(self.ref_vels)
+        # self.update()
+
+    def clear_torque_sensor_offset(self):
+        self.ext_torques_offset = -array(self.ext_torques)
+
+    def update(self):
+        # print 'updating'
+        # TODO simulation goes here
+        # use: self.ext_torques_offset, self.stiffness, self.ref_angles,
+        # self.ref_vels
+        # self.angles, self.speed, self.ext_torques
+        # and for thumb also self.base_angle
+        sim_param_bottle = self.sim_param_port.read(False)
+        if sim_param_bottle:
+            sim_param = array(
+                map(
+                    yarp.Value.asDouble,
+                    map(sim_param_bottle.get,
+                        range(sim_param_bottle.size()))))[::-1]
+            self.sim.set_param(sim_param)
+        torque_in_bottle = self.torque_in_port.read(False)
+        if torque_in_bottle:
+            torque_in = array(
+                map(
+                    yarp.Value.asDouble,
+                    map(torque_in_bottle.get,
+                        range(torque_in_bottle.size()))))[::-1]
+            if self.finger_num == 0:
+                self.sim.set_ext_torque(concatenate((torque_in, array([0.]))))
+            else:
+                self.sim.set_ext_torque(torque_in)
+            self.ext_torques = torque_in
+            # print 'torque_in', self.ext_torques
+
+        # print 'Finger num', self.finger_num
+        self._angles = self.sim.get_q(time.time())[:3] * 180.0 / pi
+
+
+class Thumb_sim(Finger_sim):
+    def __init__(self, port, basename, finger, hands_config):
+        Finger_sim.__init__(self, port, basename, finger, hands_config)
+        self.ref_angles = array((5., 5., 0., 0.))
+        self.max_base_vel = 100.
+        self.ref_vels = array((20., 20., 20., self.max_base_vel))
+        self.base_braked = False
+        self._base_angle = 0.
+
+    def unbrake_base(self):
+        self.base_braked = False
+
+    def _get_base_angle(self):
+        return (self._base_angle)
+
+    base_angle = property(_get_base_angle)
+
+    def move(self, angles, vels=(100., 100., 100.), interval=0.1):
+        self.ref_angles[:3] = array(angles)
+        self.ref_vels[:3] = array(vels)
+        self.sim.set_q_ref(self.ref_angles * pi / 180.0)
+
+    def move_base(self, angle):
+        self.ref_angles[-1] = angle
+        print 'Moving base', self.ref_angles
+        self.sim.set_q_ref(self.ref_angles * pi / 180.0)
+
+    def update(self):
+        Finger_sim.update(self)
+        self._base_angle = self.sim.q[-1] * 180.0 / pi
+
+
+class Hand_sim(object):
+    def __init__(self, port, basename, hands_config):
+        self.port = port
+        self.thumb = Thumb_sim(self.port, basename, 0, hands_config)
+        self.first = Finger_sim(self.port, basename, 1, hands_config)
+        self.middle = Finger_sim(self.port, basename, 2, hands_config)
+        self.ring = Finger_sim(self.port, basename, 3, hands_config)
+        self.emergency_stop = False
+
+    def __iter__(self):
+        return iter([self.thumb, self.first, self.middle, self.ring])
+
+    def disable_emergency_stop(self):
+        self.emergency_stop = False
+
+    def get_hand_config(self):
+        if self.port == sahand.PORT_1:
+            return (1)
+        elif self.port == sahand.PORT_2:
+            return (2)
+        else:
+            return (0)
+
+    def set_controller(self, controller):
+        # TODO
+        pass
+
+
+class Sahboard_sim(object):
+    def __init__(self, basename, hands_config, enabled_hands=[True, True]):
+        self.enabled_hands = enabled_hands
+        self.hands = []
+        self.hands.append(Hand_sim(sahand.PORT_1, basename, hands_config))
+        self.hands.append(Hand_sim(sahand.PORT_2, basename, hands_config))
+        self.counter = 0
+        self.previous_time = time.time()
+        self.cur_time = time.time()
+        self.frequency = 60.
+        self.period = 1.0 / self.frequency
+        self.ref_next_time = self.cur_time + self.period
+
+    def is_connected(self, port):
+        if port == sahand.PORT_1:
+            if self.enabled_hands[0]:
+                return (True)
+        elif port == sahand.PORT_2:
+            if self.enabled_hands[1]:
+                return (True)
+        return (False)
+
+    def get_counter(self):
+        self.cur_time = time.time()
+        wait_time = self.ref_next_time - self.cur_time
+        if wait_time > 0:
+            # print 'Waiting for ', wait_time
+            time.sleep(wait_time)
+        else:
+            print 'Not enough time'
+        self.ref_next_time += self.period
+        for hand in self.hands:
+            for finger in hand:
+                # print 'Hand', hand.port
+                finger.update()
+        self.counter += 1
+        return (self.counter)
+
+
+def main():
+
+    # install the signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    from optparse import OptionParser
+
+    parser = OptionParser()
+    parser.add_option(
+        '-c',
+        '--calibrate',
+        dest='cal',
+        default=False,
+        help='decide if we should calibrate (CALIBRATE)',
+        metavar='CALIBRATE')
+    parser.add_option(
+        '-s',
+        '--simulate',
+        action='store_true',
+        dest='sim',
+        default=False,
+        help='Simulate hand',
+        metavar='SIMULATE')
+    parser.add_option(
+        '-d',
+        '--disable-ros',
+        action='store_true',
+        dest='dis_ros',
+        default=False,
+        help='Disable ros',
+        metavar='DISROS')
+    parser.add_option(
+        '-n',
+        '--newformat',
+        action='store_true',
+        dest='newformat',
+        default=False,
+        help='selects new format for the yarp input and output (NEWFORMAT)',
+        metavar='NEWFORMAT')
+    parser.add_option(
+        '-f',
+        '--config_filename',
+        dest='config_filename',
+        default='hands_kin.py',
+        type='string',
+        help='config filename for hands')
+    (options, args) = parser.parse_args()
+
+    from arcospyu.config_parser.config_parser import import_config
+    hands_kin = import_config(options.config_filename)
+
+    if not options.dis_ros:
+        rospub = ROSPublisher()
+
+    left_hand = sahand.PORT_2
+
+    basename = '/sahand'
+
+    import yarp
+    yarp.Network.init()
+
+    if options.sim:
+        sahboard = Sahboard_sim(basename, hands_kin)
+    else:
+        sahboard = sahand.Sahboard()
+    # Instantiate the Hand
+    hands = {}
+    for port, hand in zip([sahand.PORT_1, sahand.PORT_2], sahboard.hands):
+        if sahboard.is_connected(port):
+            hands[port] = hand
+            print 'Hand in port', port, 'connected'
+        else:
+            print 'Hand in port', port, 'not present'
+    print len(hands), 'hands detected'
+    # We should move each finger to the zero position using position-control
+    # then recalibrate the torque sensors
+    # then we can switch into (joint) impedance control
+    from time import sleep
+
+    for hand in hands.values():
+        enablefingers(hand)
+
+    if (options.cal):
+        for hand in hands.values():
+            calProcedure(hand)
+        import sys
+        sys.exit()
+
+    inps = []
+    outps = []
+    for i in range(2):
+        outps.append(yarp.BufferedPortBottle())
+        inps.append(yarp.BufferedPortBottle())
+        outps[-1].open(basename + str(i) + '/out')
+        inps[-1].open(basename + str(i) + '/in')
+        inps[-1].setStrict()
+
+    cmdp = yarp.BufferedPortBottle()
+    cmdp.open(basename + '/cmd')
+
+    from math import pi
+
+    def deg2rad(deg):
+        return (deg * pi / 180.0)
+
+    counter = 0
+    fingerDicts = {}
+
+    handstate = [False, False]
+    newhandstate = [False, False]
+
+    rad2deg = lambda x: x * 180.0 / pi
+    nmrad2nmdeg = lambda x: x * pi / 180.0
+
+    # Big loop:
+    while (go_on):
+        newcounter = sahboard.get_counter()
+
+        if (newcounter != counter):
+            counter = newcounter
+
+            # updating present hands
+            if sahboard.is_connected(sahand.PORT_1):
+                newhandstate[0] = True
+            else:
+                newhandstate[0] = False
+            if sahboard.is_connected(sahand.PORT_2):
+                newhandstate[1] = True
+            else:
+                newhandstate[1] = False
+
+            if newhandstate != handstate:
+                for hand in sahboard.hands:
+                    if sahboard.is_connected(hand.port):
+                        hands[hand.port] = hand
+                    else:
+                        if hand.port in hands:
+                            print 'Hand', hand.port, 'off'
+                            del hands[hand.port]
+                for i in range(2):
+                    if newhandstate[i] == True and handstate[i] == False:
+                        # New hand, enable hand and fingers
+                        print 'New hand!, initializing it'
+                        if i == 0:
+                            enablefingers(hands[sahand.PORT_1])
+                            calProcedure(hands[sahand.PORT_1])
+                        if i == 1:
+                            enablefingers(hands[sahand.PORT_2])
+                            calProcedure(hands[sahand.PORT_2])
+
+                for port, hand in zip(hands.keys(), hands.values()):
+                    fingerDict = {}
+                    fingerDict['thumb'] = hand.thumb
+                    fingerDict['first'] = hand.first
+                    fingerDict['middle'] = hand.middle
+                    fingerDict['ring'] = hand.ring
+                    fingerDicts[port] = fingerDict
+                handstate = list(newhandstate)
+
+            for port, hand in zip(hands.keys(), hands.values()):
+                if port == sahand.PORT_1:
+                    outp = outps[0]
+                if port == sahand.PORT_2:
+                    outp = outps[1]
+                bout = outp.prepare()
+                bout.clear()
+
+                bout.addInt(counter)
+
+                # Transmitting thumb base angle, (thumb), (first), (middle),
+                # (ring)
+                # ringDummy=DummyFinger()
+                if options.newformat:
+                    bout.addDouble(hand.thumb.base_angle * pi / 180.0)
+                else:
+                    bout.addDouble(hand.thumb.base_angle)
+                fingerList = (hand.thumb, hand.first, hand.middle, hand.ring)
+
+                if port != left_hand:
+                    for finger in fingerList:
+                        bottleTemp = bout.addList()
+                        if options.newformat:
+                            for angle in reversed(finger.angles):
+                                bottleTemp.addDouble(angle * pi / 180.0)
+                            for speed in reversed(finger.speeds):
+                                bottleTemp.addDouble(speed * pi / 180.0)
+                            for torque in reversed(finger.torques):
+                                bottleTemp.addDouble(torque)
+                        else:
+                            for angle in finger.angles:
+                                bottleTemp.addDouble(angle)
+                            for speed in finger.speeds:
+                                bottleTemp.addDouble(speed)
+                            for torque in finger.torques:
+                                bottleTemp.addDouble(torque)
+                else:
+                    for finger in fingerList:
+                        bottleTemp = bout.addList()
+                        if options.newformat:
+                            for i, angle in enumerate(reversed(finger.angles)):
+                                if i == 0:
+                                    bottleTemp.addDouble(angle * pi / 180.0)
+                                else:
+                                    bottleTemp.addDouble(angle * pi / 180.0)
+                            for i, speed in enumerate(reversed(finger.speeds)):
+                                if i == 0:
+                                    bottleTemp.addDouble(speed * pi / 180.0)
+                                else:
+                                    bottleTemp.addDouble(speed * pi / 180.0)
+                            for i, torque in enumerate(reversed(
+                                    finger.torques)):
+                                if i == 0:
+                                    bottleTemp.addDouble(torque)
+                                else:
+                                    bottleTemp.addDouble(torque)
+                        else:
+                            for i, angle in enumerate(finger.angles):
+                                if i == 2:
+                                    bottleTemp.addDouble(-angle)
+                                else:
+                                    bottleTemp.addDouble(angle)
+                            for i, speed in enumerate(finger.speeds):
+                                if i == 2:
+                                    bottleTemp.addDouble(-speed)
+                                else:
+                                    bottleTemp.addDouble(speed)
+                            for i, torque in enumerate(finger.torques):
+                                if i == 2:
+                                    bottleTemp.addDouble(-torque)
+                                else:
+                                    bottleTemp.addDouble(torque)
+
+                outp.write()
+
+            if not options.dis_ros:
+                rospub.publish_joint_states(hands)
+                rospub.publish_diagnostic_state(hands)
+
+            # Do the yarp actions
+            for port, hand in zip(hands.keys(), hands.values()):
+                if port == sahand.PORT_1:
+                    inp = inps[0]
+                if port == sahand.PORT_2:
+                    inp = inps[1]
+
+                bin = inp.read(False)
+
+                if (bin):
+                    # We expect the following formats:
+                    # (fingerName (angles, speed, stiffness) thumbBaseAngle)
+
+                    # print 'Changing ', bin.size(), ' fingers'
+                    # print 'Receive: ', bin.toString()
+                    for fingerbottle in map(yarp.Value.asList,
+                                            map(bin.get, range(bin.size()))):
+                        valuesbottle = fingerbottle.get(1).asList()
+
+                        if valuesbottle.size() == 6:
+                            if options.newformat:
+                                angles = map(
+                                    rad2deg,
+                                    map(
+                                        yarp.Value.asDouble,
+                                        map(
+                                            valuesbottle.get, reversed(
+                                                range(3)))))
+                                speeds = map(
+                                    rad2deg,
+                                    map(
+                                        yarp.Value.asDouble,
+                                        map(
+                                            valuesbottle.get,
+                                            reversed([3, 4, 5]))))
+                            else:
+                                angles = map(
+                                    yarp.Value.asDouble,
+                                    map(valuesbottle.get, range(3)))
+                                speeds = map(
+                                    yarp.Value.asDouble,
+                                    map(valuesbottle.get, [3, 4, 5]))
+                        elif valuesbottle.size() == 9:
+                            if options.newformat:
+                                angles = map(
+                                    rad2deg,
+                                    map(
+                                        yarp.Value.asDouble,
+                                        map(
+                                            valuesbottle.get, reversed(
+                                                range(3)))))
+                                speeds = map(
+                                    rad2deg,
+                                    map(
+                                        yarp.Value.asDouble,
+                                        map(
+                                            valuesbottle.get,
+                                            reversed([3, 4, 5]))))
+                                stiffnesses = map(
+                                    nmrad2nmdeg,
+                                    map(
+                                        yarp.Value.asDouble,
+                                        map(
+                                            valuesbottle.get,
+                                            reversed([6, 7, 8]))))
+                            else:
+                                angles = map(
+                                    yarp.Value.asDouble,
+                                    map(valuesbottle.get, range(3)))
+                                speeds = map(
+                                    yarp.Value.asDouble,
+                                    map(valuesbottle.get, [3, 4, 5]))
+                                stiffnesses = map(
+                                    yarp.Value.asDouble,
+                                    map(valuesbottle.get, [6, 7, 8]))
+                            try:
+                                fingerDicts[port][fingerbottle.get(
+                                    0).toString()].stiffness = stiffnesses
+                            except Exception:
+                                print 'Couldn\'t set the stiffness', stiffnesses # noqa
+                        else:
+                            print 'Invalid list size, ignoring command'
+                            continue
+                        try:
+                            if port == left_hand:
+                                if options.newformat:
+                                    angles[2] = angles[2]
+                                else:
+                                    angles[2] = -angles[2]
+                            # print 'Angles, speeds:', angles, speeds
+                            fingerDicts[port][fingerbottle.get(
+                                0).toString()].move(angles, speeds)
+                        except Exception:
+                            print 'Counldn\'t move the ', fingerbottle.get(
+                                0).toString(), ' finger', angles, ' ', speeds
+                        if fingerbottle.get(0).toString() == 'thumb':
+                            if options.newformat:
+                                thumb_base_angle = fingerbottle.get(
+                                    2).asDouble() * 180.0 / pi
+                            else:
+                                thumb_base_angle = fingerbottle.get(
+                                    2).asDouble()
+                            try:
+                                hand.thumb.move_base(int(thumb_base_angle))
+                            except Exception:
+                                print 'Couldn\'t move thumb base angle: ', thumb_base_angle # noqa
+
+                # Now the command port
+                cmd_bin = cmdp.read(False)
+                if (cmd_bin):
+                    cmd = cmd_bin.get(0).asString().c_str()
+                    if (cmd == 'cal0'):
+                        if sahand.PORT_1 in hands:
+                            calProcedure(hands[sahand.PORT_1])
+                    elif (cmd == 'cal1'):
+                        if sahand.PORT_2 in hands:
+                            calProcedure(hands[sahand.PORT_2])
+                    elif (cmd == 'enable'):
+                        if sahand.PORT_1 in hands:
+                            enablefingers(hands[sahand.PORT_1])
+                        if sahand.PORT_2 in hands:
+                            enablefingers(hands[sahand.PORT_2])
+                    elif (cmd == 'scal0'):
+                        if sahand.PORT_1 in hands:
+                            scalProcedure(hands[sahand.PORT_1])
+                    elif (cmd == 'scal1'):
+                        if sahand.PORT_2 in hands:
+                            scalProcedure(hands[sahand.PORT_2])
+                    else:
+                        print 'Received invalid command: %s' % (cmd)
+
+        else:
+            # pass
+            # print '.',
+            nanosleep(0, 500000)  # 250000
+
+    yarp.Network.fini()
+
+
+if __name__ == '__main__':
+    main()

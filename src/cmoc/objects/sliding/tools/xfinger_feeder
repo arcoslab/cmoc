@@ -1,0 +1,73 @@
+#!/usr/bin/env python
+# Copyright (c) 2011 Technische Universitaet Muenchen, Informatik Lehrstuhl IX.
+# Author: Federico Ruiz-Ugalde
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+# xfinger_feeder simulates the force generation from a finger movement. This
+# application is meant to be used together with planar_sliding_simple and
+# roboviewer
+
+import sys
+import time
+from numpy import array, identity
+from arcospyu.yarp_tools.yarp_comm_helpers import new_port, write_narray_port
+
+from arcospyu.rawkey.rawkey import Raw_key, Keys
+from arcospyu.control.control_loop import Controlloop
+from arcospyu.kdl_helpers import my_adddelta
+
+sys.path.append("../../control/motionControl")
+sys.path.append("../../tools/python/rawkey")
+
+
+class Control(Controlloop):
+    def set_params(self, params):
+        self.raw_key = Raw_key()
+        base_name = "/xfinger_feeder"
+        self.xfinger_out_port = new_port(
+            base_name + "/xfinger:out",
+            "out",
+            "/slider_sim/xfinger:in",
+            timeout=2)
+        self.pose = identity(4)
+        self.pose[:3, 3] = array([1., 0.1, 0.1])
+        self.vel = array([0., 0., 0., 0., 0., 0.])
+        self.last_time = time.time()
+
+    def process(self):
+        chars = self.raw_key.get_num_chars()
+        if len(chars) > 0:
+            if chars == Keys.UP_ARROW:
+                self.vel[1] += 0.04
+            if chars == Keys.DOWN_ARROW:
+                self.vel[1] -= 0.04
+            if chars == Keys.RIGHT_ARROW:
+                self.vel[0] += 0.04
+            if chars == Keys.LEFT_ARROW:
+                self.vel[0] -= 0.04
+        self.cur_time = time.time()
+        dt = self.cur_time - self.last_time
+        self.last_time = self.cur_time
+        self.pose = my_adddelta(self.pose, self.vel, dt)
+        write_narray_port(self.xfinger_out_port, self.pose[:3, 3])
+
+
+def main():
+    control_loop = Control(15.)
+    control_loop.loop()
+
+
+if __name__ == "__main__":
+    main()
