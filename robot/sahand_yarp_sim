@@ -494,6 +494,13 @@ def main():
     from optparse import OptionParser
 
     parser = OptionParser()
+    parser.add_option(
+        "-b",
+        "--namespace",
+        dest="namespace",
+        default="/0",
+        type="string",
+        help="ARCOS-Lab yarp basename")
     parser.add_option("-c", "--calibrate", dest="cal", default=False,
                       help="decide if we should calibrate (CALIBRATE)", metavar="CALIBRATE")
     parser.add_option("-s", "--simulate", action="store_true", dest="sim", default=False,
@@ -517,7 +524,7 @@ def main():
     right_hand_port = sahand.PORT_1
     left_hand_port  = sahand.PORT_2
 
-    basename="/sahand"
+    basename=options.namespace+"/sahand"
     
     yarp.Network.init()
 
