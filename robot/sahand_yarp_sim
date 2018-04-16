@@ -49,7 +49,7 @@ class DummyFinger(object):
         self.torques=[0.0, 0.0, 0.0]
 
 
-def calProcedure(hand):
+def calProcedure(hand, sim=False):
 
     print "Calibrating %s hand on port %d" % (['none', 'right', 'left'][hand.get_hand_config()], hand.port)
     hand.set_controller(sahand.CONTROLLER_IMPEDANCE)
@@ -62,7 +62,8 @@ def calProcedure(hand):
     #move the thumb to zeros
     hand.thumb.move((5, 5, 5), (100, 100, 100))
 
-    time.sleep(0.5)
+    if not sim:
+        time.sleep(0.5)
 
     #move the rest of the fingers back
     for finger in hand:
@@ -73,11 +74,13 @@ def calProcedure(hand):
         finger._set_stiffness((0.14, 0.49, 0.49))
         nanosleep(0, 50000000)
 
-    time.sleep(2)
+    if not sim:
+        time.sleep(2)
 
     #go into position mode!
     hand.set_controller(sahand.CONTROLLER_POSITION)
-    time.sleep(2)
+    if not sim:
+        time.sleep(2)
 
     #hand.set_controller(sahand.CONTROLLER_RESET)
     #sleep(0.2)
@@ -122,15 +125,17 @@ def scalProcedure(hand):
     print "Done!"
 
 
-def enablefingers(hand):
+def enablefingers(hand, sim=False):
     print "Enable fingers"
     #Enable the fingers
     hand.thumb.unbrake_base()
-    time.sleep(0.05)
+    if not sim:
+        time.sleep(0.05)
     for finger in hand:
         print "Finger: ", finger
         finger.enable()
-        time.sleep(0.5)
+        if not sim:
+            time.sleep(0.5)
         #Set the initial impedances
         finger._set_stiffness((0.05, 0.15, 0.15))
         time.sleep(0.05)
@@ -455,7 +460,6 @@ class Sahboard_sim(object):
         self.period=1.0/self.frequency
         self.ref_next_time=self.cur_time+self.period
 
-
     def is_connected(self,port=sahand.PORT_1):
         if port in [sahand.PORT_1, sahand.PORT_2]:
             return self.enabled_hands[port2index(port)]
@@ -465,6 +469,8 @@ class Sahboard_sim(object):
 
     def get_counter(self):
         self.cur_time=time.time()
+        if self.counter<=1:
+            self.ref_next_time=self.cur_time+self.period
         wait_time=self.ref_next_time-self.cur_time
         if wait_time>0:
             time.sleep(wait_time)
@@ -538,11 +544,11 @@ def main():
     # then recalibrate the torque sensors
     # then we can switch into (joint) impedance control
     for hand in hands.values():
-        enablefingers(hand)
+        enablefingers(hand, sim=options.sim)
 
     if (options.cal):
         for hand in hands.values():
-            calProcedure(hand)
+            calProcedure(hand, sim=options.sim)
         import sys
         sys.exit()
 
@@ -578,9 +584,8 @@ def main():
     while (go_on):
         #FIXME:
         #This method has the side effect of waiting!
-        time.sleep(0.01)
         newcounter = sahboard.get_counter()
-        print "Counter:", newcounter
+        #print "Counter:", newcounter
 
         if (newcounter != counter):
             counter = newcounter
@@ -602,8 +607,8 @@ def main():
                         print "port", hand_port
                         print "New hand!, initializing it"
                         hands[hand_port] = sahboard.hands[port2index(hand_port)]
-                        enablefingers(hands[hand_port])
-                        calProcedure(hands[hand_port])
+                        enablefingers(hands[hand_port], sim=options.sim)
+                        calProcedure(hands[hand_port], sim=options.sim)
                     else:
                         print ("Hand "+str(hand_port)+" off")
                         if hand_port in hands:
@@ -758,15 +763,15 @@ def main():
                     cmd = cmd_bin.get(0).asString()
                     if (cmd == 'cal0'):
                         if sahand.PORT_1 in hands:
-                            calProcedure(hands[sahand.PORT_1])
+                            calProcedure(hands[sahand.PORT_1], sim=options.sim)
                     elif (cmd == 'cal1'):
                         if sahand.PORT_2 in hands:
-                            calProcedure(hands[sahand.PORT_2])
+                            calProcedure(hands[sahand.PORT_2], sim=options.sim)
                     elif (cmd == 'enable'):
                         if sahand.PORT_1 in hands:
-                            enablefingers(hands[sahand.PORT_1])
+                            enablefingers(hands[sahand.PORT_1], sim=options.sim)
                         if sahand.PORT_2 in hands:
-                            enablefingers(hands[sahand.PORT_2])
+                            enablefingers(hands[sahand.PORT_2], sim=options.sim)
                     elif (cmd == 'scal0'):
                         if sahand.PORT_1 in hands:
                             scalProcedure(hands[sahand.PORT_1])
