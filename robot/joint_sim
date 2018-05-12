@@ -19,6 +19,7 @@
 from numpy import array, amin, amax
 
 from cmoc.robot.joint_controller import Controller_mass_sim, Controller_type
+from arcospyu.yarp_tools.yarp_comm_helpers import ArcosYarp
 
 def main():
     import yarp
@@ -30,35 +31,31 @@ def main():
 
     yarp.Network.init()
 
+    arm_base_name=config.robotarm_portbasename
+    module_base_name=arm_base_name+"/joint_sim"
+    yarp_ctrl=ArcosYarp(ports_name_prefix=options.namespace, module_name_prefix=module_base_name)
+
     joints=config.nJoints
 
     port_base_name="/joint_sim"
     robotbn=options.namespace + config.robotarm_portbasename
     portbn=robotbn + port_base_name
-    qvin_port=yarp.BufferedPortBottle()
-    qvinpn=portbn+"/qvin"
-    qvin_port.open(qvinpn)
-    qout_port=yarp.BufferedPortBottle()
-    qoutpn=portbn+"/qout"
-    qout_port.open(qoutpn)
-    qin_port=yarp.BufferedPortBottle()
-    qinpn=portbn+"/qin"
-    qin_port.open(qinpn)
-    torque_in_port=yarp.BufferedPortBottle()
-    torque_inpn=portbn+"/torque_in"
-    torque_in_port.open(torque_inpn)
-    sim_param_port=yarp.BufferedPortBottle()
-    sim_parampn=portbn+"/sim_param"
-    sim_param_port.open(sim_parampn)
-    stiffness_port=yarp.BufferedPortBottle()
-    stiffnesspn=options.namespace + config.robotarm_portbasename+"/robot/stiffness"
-    stiffness_port.open(stiffnesspn)
+    qvin_port=yarp_ctrl.create_yarp_port("/qvin", strict=False)
+    qout_port=yarp_ctrl.create_yarp_port("/qdot", input_port=False)
+    qin_port=yarp_ctrl.create_yarp_port("/qin", strict=False)
+    torque_in_port=yarp_ctrl.create_yarp_port("/torque_in", strict=False)
+    sim_param_port=yarp_ctrl.create_yarp_port("/sim_param", strict=False)
+    stiffness_port=yarp_ctrl.create_yarp_port(options.namespace + config.robotarm_portbasename+"/robot/stiffness", strict=False)
+    #stiffnesspn=options.namespace + config.robotarm_portbasename+"/robot/stiffness"
 
     yconnect=yarp.Network.connect
     cstyle=yarp.ContactStyle()
     cstyle.persistent=True
-    yconnect(qoutpn, robotbn+"/bridge/qin", cstyle)
-    yconnect(qoutpn, robotbn+"/bridge/qcmded", cstyle)
+    yarp_ctrl.connect(qout_port, arm_base_name+"/bridge", "/qin")
+    yarp_ctrl.connect(qout_port, arm_base_name+"/bridge", "/qcmded")
+
+    #yconnect(qoutpn, robotbn+"/bridge/qin", cstyle)
+    #yconnect(qoutpn, robotbn+"/bridge/qcmded", cstyle)
 
     kp_m=1.
     kp_m=2.
@@ -73,6 +70,8 @@ def main():
 
     init_q=True
     while True:
+        yarp_ctrl.update()
+
         stiffness_bottle=stiffness_port.read(False)
         if stiffness_bottle:
             stiffness=map(yarp.Value.asDouble,map(stiffness_bottle.get,range(stiffness_bottle.size())))
