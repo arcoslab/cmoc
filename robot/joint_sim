@@ -45,7 +45,7 @@ def main():
     qin_port=yarp_ctrl.create_yarp_port("/qin", strict=False)
     torque_in_port=yarp_ctrl.create_yarp_port("/torque_in", strict=False)
     sim_param_port=yarp_ctrl.create_yarp_port("/sim_param", strict=False)
-    stiffness_port=yarp_ctrl.create_yarp_port(options.namespace + config.robotarm_portbasename+"/robot/stiffness", strict=False)
+    stiffness_port=yarp_ctrl.create_yarp_port(options.namespace + config.robotarm_portbasename+"/robot/stiffness", strict=False, full_name=True)
     #stiffnesspn=options.namespace + config.robotarm_portbasename+"/robot/stiffness"
 
     yconnect=yarp.Network.connect
