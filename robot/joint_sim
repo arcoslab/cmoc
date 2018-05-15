@@ -63,6 +63,7 @@ def main():
     kvp=0.8
     inertia=0.005
     inertia=0.1
+    inertia=0.01
     stiffness=array([kp*kvp]*joints)
     sim_param=[kp,kvp,inertia,stiffness]
     sim=Controller_mass_sim(kp,kvp,inertia,stiffness,joints,config.arm_extralimits)
