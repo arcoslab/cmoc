@@ -57,16 +57,17 @@ def main():
     #yconnect(qoutpn, robotbn+"/bridge/qin", cstyle)
     #yconnect(qoutpn, robotbn+"/bridge/qcmded", cstyle)
 
+    qv_max=config.max_vel_joint_sim
     kp_m=1.
     kp_m=2.
-    kp=0.8
-    kvp=0.8
+    kp=config.jpctrl_kp
+    kvp=config.jpctrl_kvp
     inertia=0.005
     inertia=0.1
-    inertia=0.01
+    inertia=config.jpctrl_inertia
     stiffness=array([kp*kvp]*joints)
     sim_param=[kp,kvp,inertia,stiffness]
-    sim=Controller_mass_sim(kp,kvp,inertia,stiffness,joints,config.arm_extralimits)
+    sim=Controller_mass_sim(kp,kvp,inertia,stiffness,joints,config.arm_extralimits, qv_max=qv_max)
     sim.set_initial_time(time.time())
 
     init_q=True
@@ -103,7 +104,7 @@ def main():
             sim.set_ext_torque(torque_in)
         q=sim.get_q(time.time())
         sim.set_joint_limits(config.updateJntLimits(q))
-        time.sleep(0.005)
+        time.sleep(0.001)
         qout_bottle=qout_port.prepare()
         qout_bottle.clear()
         map(qout_bottle.addDouble,q)

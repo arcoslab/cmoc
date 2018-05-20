@@ -24,7 +24,7 @@ class Controller_type(object):
     velocity=1
 
 class Controller_mass_sim(object):
-    def __init__(self,kp,kvp,inertia,stiffness,joint_num,joint_limits):
+    def __init__(self,kp,kvp,inertia,stiffness,joint_num,joint_limits, qv_max=180.0*pi/180.0):
         '''
         Simulates a controller/mass system.
         kp_m: kp controller parameter divided by the virtual mass bigger is equivalent to increase the controller speed or decrease the mass
@@ -42,7 +42,7 @@ class Controller_mass_sim(object):
         self.q_ref=array([0.0]*joint_num) #joint desired position
         self.q_ref_old=array([0.0]*joint_num) 
         self.qv_ref=self.qv # desired speed
-        self.qv_max=array([180.0*pi/180.0]*joint_num) # maximum joint speed
+        self.qv_max=array([qv_max]*joint_num) # maximum joint speed
         self.ext_torque=array([0.0]*joint_num)
         self.acc=array([0.0]*joint_num) # acceleration produced by the controller and the virtual mass
         self.last_time=0.0
